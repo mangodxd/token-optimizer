@@ -140,7 +140,7 @@ See `examples/claude-md-optimized.md` for the pattern.
 | Delete files | Always archive to `~/.claude/_backups/` |
 | Claim "this might save tokens" | MEASURE IT (use scripts/measure.py) |
 | Skip verification step | Run Phase 5 after every change |
-| Use Opus agents for file reading (waste) | Use haiku for data gathering |
+| Use opus for simple file reading | Match model to task: haiku for counting, sonnet for judgment, opus for synthesis |
 | Present findings without next steps | Quantify everything (X tokens, Y%) |
 
 ---

@@ -52,12 +52,24 @@ One command. Six agents audit your setup in parallel. You get a prioritized fix 
 
 | Area | What It Catches |
 |------|----------------|
-| **CLAUDE.md** | Bloated config, content that should be skills, duplication with MEMORY.md |
+| **CLAUDE.md** | Content that should be skills or reference files, duplication with MEMORY.md, poor cache structure |
 | **MEMORY.md** | Overlap with CLAUDE.md, verbose history that should be condensed |
-| **Skills** | Duplicates, archived skills still loading, unused domain skills |
-| **MCP Servers** | Unused servers, duplicate tools, missing Tool Search |
+| **Skills & Plugins** | Plugin-bundled skills you never use, semantic duplicates, archived skills still loading |
+| **MCP Servers** | Unused servers, duplicate tools across servers and plugins, missing Tool Search |
 | **Commands** | Rarely-used commands, merge candidates |
 | **Advanced** | Missing .claudeignore, no hooks, poor cache structure, no monitoring |
+
+### The Fix: Progressive Disclosure
+
+Not everything belongs in CLAUDE.md. The optimizer applies a three-tier architecture:
+
+| Tier | Where | Token Cost | What Goes Here |
+|------|-------|------------|----------------|
+| **Always loaded** | CLAUDE.md | Every message (~800 tokens target) | Identity, critical rules, key paths |
+| **On demand** | Skills or reference files | Skills: ~100 tokens in menu, full content only when invoked. Reference files: zero until read. | Workflows become skills. Coding standards, tool configs, detailed docs become `.md` reference files. |
+| **Explicit** | Project files | Zero until you ask | Full guides, templates, detailed documentation |
+
+A bloated CLAUDE.md doesn't need deleting. Coding standards move to a reference file. A deployment workflow becomes a skill. Personality spec condenses to one line with the full version in MEMORY.md. Same functionality, fraction of the per-message cost.
 
 ## How It Works
 
