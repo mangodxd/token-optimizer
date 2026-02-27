@@ -442,6 +442,116 @@ Prompt caching means the dollar savings are modest (cached tokens cost 10% of ba
 
 ---
 
+## Additional Config Features (Token Impact)
+
+### `.claude/rules/` Directory (Path-Scoped Rules)
+
+Rules files in `.claude/rules/*.md` support `paths:` frontmatter for directory-scoped loading. Each rule file loads similarly to CLAUDE.md content (~15 tokens/line of prose).
+
+```
+.claude/rules/
+  backend.md          # paths: ["src/backend/**"]
+  frontend.md         # paths: ["src/frontend/**"]
+  testing.md          # paths: ["tests/**"]
+  general.md          # no paths = always loaded
+```
+
+**Token impact**: Rules without `paths:` frontmatter load every message (same as CLAUDE.md). Rules with `paths:` load only when working in matching directories. Measure total rules content with `measure.py report`.
+
+**Optimization**: Audit `.claude/rules/` for stale rules, duplicates, and rules that should have path scoping but don't.
+
+### `CLAUDE.local.md` (Project-Local, Gitignored)
+
+A gitignored version of project CLAUDE.md. Always loaded alongside CLAUDE.md when present. Used for local overrides, personal preferences, or environment-specific config that shouldn't be committed.
+
+**Token impact**: Adds to CLAUDE.md overhead every message. Must be audited alongside CLAUDE.md.
+
+### `.claude/settings.local.json` (Local Settings Overlay)
+
+Local settings file that overlays `.claude/settings.json`. Can contain env var overrides, permission changes. Not committed to git.
+
+**Token impact**: Indirect. Can override env vars like `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, `MAX_THINKING_TOKENS`, etc. The optimizer should check for its existence and report any token-relevant overrides.
+
+### `@imports` in CLAUDE.md
+
+CLAUDE.md supports `@path/to/file.md` imports that pull external file content into the always-loaded context. This can silently add thousands of tokens.
+
+```markdown
+# My CLAUDE.md
+@docs/coding-standards.md
+@docs/api-reference.md
+```
+
+**Token impact**: Each imported file's full content loads every message. A 200-line coding standards doc = ~3,000 tokens added silently.
+
+**Optimization**: Grep CLAUDE.md for `@` patterns. Resolve paths. Estimate total imported content. Move large imports to skills or reference files.
+
+### `disable-model-invocation: true` in Skill Frontmatter
+
+Skills can set `disable-model-invocation: true` to prevent being invoked by the model (only user can invoke). This doesn't change token cost but is useful context: skills without this flag can be auto-invoked, which triggers full skill content loading.
+
+### Compact Instructions Section in CLAUDE.md
+
+CLAUDE.md can include a section that guides what gets preserved during context compaction. This influences what survives /compact and auto-compact.
+
+```markdown
+## Compact Instructions
+When compacting this conversation, always preserve:
+- Current task context and progress
+- File paths being modified
+- Test results and error messages
+```
+
+**Token impact**: Small (the section itself is ~50-100 tokens). But the behavioral impact is significant: it controls what survives compaction, affecting quality of continued sessions.
+
+### `/rewind` Command
+
+Targeted compaction alternative. Instead of full /compact (which summarizes everything), /rewind removes specific recent turns. Better for "that didn't work, let me try again" situations.
+
+**Token impact**: More precise context management. Less lossy than full /compact.
+
+### Context Loading Hierarchy (13 Levels)
+
+Full priority order for what Claude Code loads:
+
+```
+1.  Core system prompt (fixed)
+2.  Built-in tool definitions (fixed)
+3.  MCP tool definitions (deferred via Tool Search)
+4.  MCP server instructions
+5.  Plugin-bundled skills/commands
+6.  User skills frontmatter (~/.claude/skills/)
+7.  User commands frontmatter (~/.claude/commands/)
+8.  Global CLAUDE.md (~/.claude/CLAUDE.md)
+9.  Project CLAUDE.md ([repo]/CLAUDE.md)
+10. CLAUDE.local.md ([repo]/CLAUDE.local.md)
+11. .claude/rules/*.md (path-matched rules)
+12. MEMORY.md (~/.claude/projects/.../memory/MEMORY.md)
+13. System reminders (auto-injected)
+```
+
+Items 1-5 are largely fixed or deferred. Items 6-12 are your optimization targets. Item 13 is partially controlled via .claudeignore.
+
+### Settings.json Environment Variables (Token-Relevant)
+
+The `env` block in `~/.claude/settings.json` can set several token-relevant variables:
+
+```json
+{
+  "env": {
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "70",
+    "CLAUDE_CODE_MAX_THINKING_TOKENS": "10000",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
+    "MAX_MCP_OUTPUT_TOKENS": "25000",
+    "ENABLE_TOOL_SEARCH": "auto"
+  }
+}
+```
+
+See `optimization-checklist.md` items 23-30 for what each does and how the optimizer audits them.
+
+---
+
 ## Further Reading
 
 - **Official Docs**: https://docs.anthropic.com (prompt caching, context windows)

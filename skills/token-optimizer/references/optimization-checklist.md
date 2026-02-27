@@ -432,6 +432,115 @@ The config changes shrink your per-message overhead. The behavioral changes comp
 
 ---
 
+## ENVIRONMENT VARIABLES & SETTINGS (Tune your setup)
+
+These are settings that affect token usage and context behavior. The optimizer audits current values and explains tradeoffs.
+
+### 23. MAX_THINKING_TOKENS (default: 10,000)
+**Target**: Understand thinking token budget
+
+**What it is**: Controls the maximum tokens Claude spends on extended thinking (chain-of-thought reasoning). Extended thinking makes Claude smarter on complex problems but uses expensive output tokens.
+
+**Actions**:
+- [ ] Check current value: `CLAUDE_CODE_MAX_THINKING_TOKENS` in settings.json env block
+- [ ] Observe thinking patterns in `/cost` output (thinking tokens are listed separately)
+- [ ] Consider if thinking budget is being spent on simple tasks (file renames, quick edits don't need 10K thinking tokens)
+
+**What the optimizer does**: Reports current value. Surfaces patterns where thinking budget was clearly wasted (e.g., 10K thinking tokens on a file rename). Does NOT suggest reducing it for complex reasoning tasks.
+
+---
+
+### 24. CLAUDE_CODE_MAX_OUTPUT_TOKENS (default: 16,384, max: 128,000)
+**Target**: Understand output token budget
+
+**What it is**: Maximum tokens Claude generates per response. If you hit truncation ("output was cut off"), this may need increasing. Higher values allow longer responses but increase cost.
+
+**Actions**:
+- [ ] Check current value in settings.json env block
+- [ ] Note if you've seen truncation issues
+- [ ] Default is fine for most users
+
+**What the optimizer does**: Reports current value. Notes if user has hit truncation issues.
+
+---
+
+### 25. MAX_MCP_OUTPUT_TOKENS (default: 25,000)
+**Target**: Understand MCP tool output limits
+
+**What it is**: Maximum tokens a single MCP tool call can return. Tools returning max-length output may be sending more data than needed.
+
+**Actions**:
+- [ ] Check if any MCP tools consistently return very large outputs
+- [ ] Consider if those tools have filtering options to reduce output size
+
+**What the optimizer does**: Reports current value. Flags MCP tools that consistently return near-max output (potential tuning opportunity).
+
+---
+
+### 26. BASH_MAX_OUTPUT_LENGTH (default: system)
+**Target**: Control bash output token consumption
+
+**What it is**: Limits how much stdout/stderr from Bash tool calls gets captured into context. Verbose test runners or build logs can dump thousands of tokens.
+
+**Actions**:
+- [ ] Check if bash output is frequently truncated (might need raising)
+- [ ] Check if verbose commands are filling context unnecessarily (might need lowering)
+
+**What the optimizer does**: Reports current value. Flags if bash output appears frequently truncated.
+
+---
+
+### 27. ENABLE_TOOL_SEARCH (default: auto, active above threshold)
+**Target**: Verify Tool Search is active (85% MCP savings)
+
+**What it is**: Tool Search defers MCP tool definitions until actually needed. Instead of loading 300-850 tokens per tool upfront, only ~15 tokens per tool name is loaded. This is the single biggest MCP optimization.
+
+**Actions**:
+- [ ] Verify Tool Search is active in your session (look for ToolSearch in available tools)
+- [ ] If not active, check Claude Code version and tool count threshold
+- [ ] `ENABLE_TOOL_SEARCH=auto:N` sets the threshold to N tools (default auto)
+
+**What the optimizer does**: Reports if Tool Search is active. If not, explains the 85% savings from enabling it. This is flagged as HIGH PRIORITY if missing.
+
+---
+
+### 28. CLAUDE_CODE_DISABLE_AUTO_MEMORY (default: not set)
+**Target**: Audit auto-memory content quality, not the feature itself
+
+**What it is**: Auto-memory writes learnings to MEMORY.md automatically. This is a valuable feature. The optimization target is the CONTENT it produces, not the feature.
+
+**Actions**:
+- [ ] Check MEMORY.md for duplicate entries (auto-memory sometimes writes the same insight twice)
+- [ ] Check for entries that duplicate CLAUDE.md content
+- [ ] Check for stale entries (rules that no longer apply)
+- [ ] Condense verbose entries to current rule only
+
+**What the optimizer does**: Audits MEMORY.md for duplicates, stale entries, and redundancy with CLAUDE.md. Cleans up the CONTENT. Does NOT suggest disabling the feature.
+
+---
+
+### 29. CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING (default: not set)
+**Target**: Understand what adaptive thinking does
+
+**What it is**: When set, disables Claude's ability to automatically adjust thinking depth based on task complexity. Normally Claude uses more thinking for hard problems and less for simple ones.
+
+**Actions**:
+- [ ] Check if set in settings.json env block
+- [ ] Understand that disabling this means fixed thinking budget regardless of task
+
+**What the optimizer does**: Reports if set. Explains what it does. No recommendation to disable.
+
+---
+
+### 30. CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (default: ~83%)
+**Target**: Control when auto-compaction triggers
+
+**What it is**: Auto-compact triggers when context reaches this percentage of the window. The system default (~83%) is reasonable but power users who manage /compact manually may want to adjust or disable entirely.
+
+**Already covered in item 14**, but listed here for completeness as a settings.json env var. Set to 70 for earlier compaction (better quality), or disable auto-compact entirely and manage /compact manually (recovers ~33K tokens of buffer space).
+
+---
+
 ## ANTI-PATTERNS
 
 - Don't add content to CLAUDE.md without asking "Can this be a skill or reference file?"

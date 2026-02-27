@@ -116,6 +116,103 @@ See `examples/claude-md-optimized.md` for the pattern.
 
 ---
 
+## 4H: Rules Cleanup
+
+Scan `.claude/rules/` directory and optimize rule files.
+
+**Steps**:
+1. List all files in `~/.claude/rules/` (if directory exists)
+2. For each rule file:
+   - Measure token cost (lines x ~15 for prose, ~8 for YAML)
+   - Check for `paths:` frontmatter (scoped vs always-loaded)
+   - Compare content against other rules for duplication
+3. Present findings:
+   ```
+   Rules Directory: X files, ~Y tokens total
+   Always-loaded (no path scope): X files, ~Y tokens
+   Path-scoped: X files
+
+   Optimization opportunities:
+   - [rule1.md] and [rule2.md]: 60% content overlap, merge candidate
+   - [rule3.md]: No path scope but only applies to tests/ (add paths: ["tests/**"])
+   - [rule4.md]: Stale (references deprecated tool)
+   ```
+4. Generate merge plan for duplicates
+5. Execute after user approval (backup originals to `~/.claude/_backups/rules-$(date +%Y%m%d)/`)
+
+---
+
+## 4I: Settings Tuning
+
+Audit settings.json env block and help user tune token-relevant variables.
+
+**Steps**:
+1. Read `~/.claude/settings.json` (and `settings.local.json` if exists)
+2. Check env block for token-relevant variables (items 23-30 from checklist)
+3. Present current vs default values with tradeoff explanations:
+   ```
+   Settings Audit:
+   | Variable                        | Current | Default | Recommendation |
+   |---------------------------------|---------|---------|----------------|
+   | CLAUDE_AUTOCOMPACT_PCT_OVERRIDE | not set | ~83%    | Set to 70 for better quality |
+   | MAX_THINKING_TOKENS             | not set | 10,000  | Default is fine |
+   | ENABLE_TOOL_SEARCH              | auto    | auto    | Good (active)  |
+   ```
+4. Apply user-chosen changes to settings.json env block
+5. Verify changes don't conflict with settings.local.json overrides
+
+---
+
+## 4J: Skill Description Tightening
+
+Flag verbose skill frontmatter and generate tighter descriptions.
+
+**Steps**:
+1. Scan all skill SKILL.md files in `~/.claude/skills/`
+2. Extract frontmatter `description:` field from each
+3. Flag descriptions >200 characters (~50 tokens, twice the typical ~100 token budget)
+4. Generate tighter alternatives:
+   ```
+   Verbose Descriptions:
+   - morning (312 chars): "Your comprehensive daily briefing that covers email, calendar..."
+     Suggested: "Daily briefing: email, calendar, tasks, partner updates"
+   - code-review (285 chars): "Performs an in-depth code review analyzing..."
+     Suggested: "Code review with style, security, and performance checks"
+   ```
+5. Apply approved changes to SKILL.md frontmatter (backup first)
+
+**Note**: Only modify the `description:` field in frontmatter. Never touch skill body content.
+
+---
+
+## 4K: Compact Instructions Setup
+
+Generate and add a compact instructions section to CLAUDE.md.
+
+**Steps**:
+1. Read current CLAUDE.md content
+2. Identify what should survive compaction:
+   - Current task context
+   - Key file paths being modified
+   - Active decisions and constraints
+   - Error states and test results
+3. Generate a compact instructions section:
+   ```markdown
+   ## Compact Instructions
+   When compacting this conversation, always preserve:
+   - Current task context and progress
+   - File paths being modified and their state
+   - Test results and error messages
+   - Active constraints and decisions made
+   - User preferences expressed in this session
+   ```
+4. Present to user for customization
+5. Add to CLAUDE.md after approval (place near end, volatile section)
+
+**Why**: Without compact instructions, compaction is generic and may lose critical session context. This is especially valuable for long sessions with complex multi-step work.
+
+---
+
 ## Quality Checklist
 
 - [ ] Coordination folder created with manifest

@@ -180,8 +180,8 @@ skills/token-optimizer/
     user-profiles.svg                  Context usage by setup type
   references/
     agent-prompts.md                   8 agent prompt templates
-    implementation-playbook.md         Fix implementation details
-    optimization-checklist.md          22 optimization techniques
+    implementation-playbook.md         Fix implementation details (4A-4K)
+    optimization-checklist.md          30 optimization techniques
     token-flow-architecture.md         How Claude Code loads tokens
   examples/
     claude-md-optimized.md             Optimized CLAUDE.md template
@@ -189,6 +189,12 @@ skills/token-optimizer/
     hooks-starter.json                 Hook configuration example
   scripts/
     measure.py                         Before/after measurement tool
+tests/
+  conftest.py                          Shared pytest fixtures
+  test_measure.py                      measure.py unit tests
+  test_consistency.py                  Cross-file number validation
+  test_skill_structure.py              Structural validity
+  test_examples.py                     Example file validation
 install.sh                             One-command installer
 ```
 

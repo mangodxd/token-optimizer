@@ -59,7 +59,7 @@ Read `references/agent-prompts.md` for all prompt templates.
 
 Dispatch 6 agents in parallel (single message, multiple Task calls):
 
-**Model assignment**: CLAUDE.md, MEMORY.md, Skills, MCP auditors use `model="sonnet"` (judgment calls). Commands, Advanced use `model="haiku"` (data gathering).
+**Model assignment**: CLAUDE.md, MEMORY.md, Skills, MCP auditors use `model="sonnet"` (judgment calls). Commands use `model="haiku"` (data gathering). Settings & Advanced uses `model="sonnet"` (judgment on rules, settings, @imports).
 
 | Agent | Output File | Task |
 |-------|-------------|------|
@@ -68,7 +68,7 @@ Dispatch 6 agents in parallel (single message, multiple Task calls):
 | Skills Auditor | `audit/skills.md` | Count, frontmatter overhead, duplicates |
 | MCP Auditor | `audit/mcp.md` | Deferred tools, broken/unused servers |
 | Commands Auditor | `audit/commands.md` | Count, menu overhead |
-| Hooks & Advanced | `audit/advanced.md` | Hooks, .claudeignore, caching, monitoring |
+| Settings & Advanced | `audit/advanced.md` | Hooks, rules, settings, @imports, .claudeignore, caching, monitoring |
 
 Pass `COORD_PATH` to each agent. Wait for all to complete.
 
@@ -125,7 +125,7 @@ What should we tackle first?
 
 Read `references/implementation-playbook.md` for detailed steps.
 
-Available actions: 4A (CLAUDE.md), 4B (MEMORY.md), 4C (Skills), 4D (.claudeignore), 4E (MCP), 4F (Hooks), 4G (Cache Structure).
+Available actions: 4A (CLAUDE.md), 4B (MEMORY.md), 4C (Skills), 4D (.claudeignore), 4E (MCP), 4F (Hooks), 4G (Cache Structure), 4H (Rules Cleanup), 4I (Settings Tuning), 4J (Skill Description Tightening), 4K (Compact Instructions Setup).
 
 Templates in `examples/`. Always backup before changes. Present diffs for approval.
 
@@ -175,7 +175,8 @@ NEXT STEPS (Behavioral)
 | Task | Model | Fallback | Why |
 |------|-------|----------|-----|
 | CLAUDE.md, MEMORY.md, Skills, MCP auditors | `sonnet` | `haiku` | Judgment: content structure, semantic duplicates |
-| Commands, Advanced auditors | `haiku` | - | Data gathering: counting, presence checks |
+| Commands auditor | `haiku` | - | Data gathering: counting, presence checks |
+| Settings & Advanced auditor | `sonnet` | `haiku` | Judgment: rules quality, settings tradeoffs, @imports analysis |
 | Synthesis (Phase 2) | `opus` | `sonnet` | Cross-cutting prioritization across all findings |
 | Orchestrator | Default | - | Coordination only |
 | Verification (Phase 5) | `haiku` | - | Re-measurement |

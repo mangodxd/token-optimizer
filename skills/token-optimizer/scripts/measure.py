@@ -187,6 +187,7 @@ def count_mcp_tools_and_servers():
     """Count MCP servers and estimate deferred tool overhead."""
     server_count = 0
     tool_count_estimate = 0
+    seen_names = set()
     server_names = []
 
     for config_path in get_mcp_config_paths():
@@ -197,7 +198,8 @@ def count_mcp_tools_and_servers():
                 config = json.load(f)
             servers = config.get("mcpServers", config.get("mcp_servers", {}))
             for name in servers:
-                if name not in server_names:  # avoid duplicates across configs
+                if name not in seen_names:
+                    seen_names.add(name)
                     server_names.append(name)
                     server_count += 1
         except (json.JSONDecodeError, PermissionError, OSError):
@@ -215,6 +217,118 @@ def count_mcp_tools_and_servers():
         "tokens": tokens,
         "note": f"Estimated ~{AVG_TOOLS_PER_SERVER} tools/server x ~{TOKENS_PER_DEFERRED_TOOL} tokens/tool (Tool Search deferred)",
     }
+
+
+def _has_paths_frontmatter(filepath):
+    """Check if a rules file has paths: frontmatter (path-scoped rule)."""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(2048)  # Only need to check frontmatter
+        if content.startswith("---"):
+            end = content.find("---", 3)
+            if end > 0:
+                frontmatter = content[3:end]
+                return "paths:" in frontmatter
+        return False
+    except (FileNotFoundError, PermissionError, OSError):
+        return False
+
+
+def _detect_imports(claude_md_path):
+    """Detect @import patterns in a CLAUDE.md file and estimate token cost."""
+    imports = []
+    try:
+        with open(claude_md_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+        # Match lines starting with @ followed by a path-like string
+        pattern = re.compile(r'^@(\S+\.(?:md|txt|yaml|yml|json))\s*$', re.MULTILINE)
+        project_root = claude_md_path.parent.resolve()
+        for match in pattern.finditer(content):
+            import_path = match.group(1)
+            resolved = (project_root / import_path).resolve()
+            # Security: ensure resolved path stays under project root
+            try:
+                resolved.relative_to(project_root)
+            except ValueError:
+                continue  # Skip path traversal attempts
+            tokens = estimate_tokens_from_file(resolved) if resolved.exists() else 0
+            imports.append({
+                "pattern": f"@{import_path}",
+                "resolved_path": str(resolved),
+                "exists": resolved.exists(),
+                "tokens": tokens,
+            })
+    except (FileNotFoundError, PermissionError, OSError):
+        pass
+    return imports
+
+
+TOKEN_RELEVANT_ENV_VARS = [
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+    "CLAUDE_CODE_MAX_THINKING_TOKENS",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "MAX_MCP_OUTPUT_TOKENS",
+    "ENABLE_TOOL_SEARCH",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+    "BASH_MAX_OUTPUT_LENGTH",
+]
+
+
+def _check_settings_env(settings_path):
+    """Check settings.json for token-relevant environment variables."""
+    result = {"found": {}, "settings_exists": settings_path.exists()}
+    if not settings_path.exists():
+        return result
+    try:
+        with open(settings_path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        env = settings.get("env", {})
+        for var in TOKEN_RELEVANT_ENV_VARS:
+            if var in env:
+                result["found"][var] = env[var]
+    except (json.JSONDecodeError, PermissionError, OSError):
+        pass
+    return result
+
+
+def _get_frontmatter_description_length(filepath):
+    """Get the character length of the description field in YAML frontmatter."""
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read(4096)
+        if not content.startswith("---"):
+            return 0
+        end = content.find("---", 3)
+        if end <= 0:
+            return 0
+        frontmatter = content[3:end]
+        lines = frontmatter.split("\n")
+        desc_text = ""
+        in_desc = False
+        for line in lines:
+            if line.startswith("description:"):
+                value = line[len("description:"):].strip()
+                if value in ("|", ">", "|+", "|-", ">+", ">-"):
+                    # Multi-line block scalar
+                    in_desc = True
+                    continue
+                # Single-line value (possibly quoted)
+                if value.startswith('"') and value.endswith('"'):
+                    desc_text = value[1:-1]
+                elif value.startswith("'") and value.endswith("'"):
+                    desc_text = value[1:-1]
+                else:
+                    desc_text = value
+                break
+            elif in_desc:
+                if line and (line[0] == " " or line[0] == "\t"):
+                    desc_text += line.strip() + " "
+                else:
+                    break
+        return len(desc_text.strip())
+    except (FileNotFoundError, PermissionError, OSError):
+        return 0
 
 
 def measure_components():
@@ -268,11 +382,12 @@ def measure_components():
             "lines": count_lines(memory_path) if memory_path.exists() else 0,
         }
 
-    # Skills (read actual frontmatter size)
+    # Skills (read actual frontmatter size + check description quality in single pass)
     skills_dir = CLAUDE_DIR / "skills"
     skill_count = 0
     skill_tokens = 0
     skill_names = []
+    verbose_skills = []
     if skills_dir.exists():
         for item in sorted(skills_dir.iterdir()):
             skill_md = item / "SKILL.md"
@@ -280,6 +395,12 @@ def measure_components():
                 skill_count += 1
                 skill_names.append(item.name)
                 skill_tokens += estimate_tokens_from_frontmatter(skill_md)
+                desc_len = _get_frontmatter_description_length(skill_md)
+                if desc_len > 200:
+                    verbose_skills.append({
+                        "name": item.name,
+                        "description_chars": desc_len,
+                    })
     components["skills"] = {
         "count": skill_count,
         "tokens": skill_tokens,
@@ -327,23 +448,101 @@ def measure_components():
         "exists": global_ignore.exists() or project_ignore.exists(),
     }
 
-    # Hooks
+    # Read settings.json once (used for hooks, env vars, MCP)
     settings_path = CLAUDE_DIR / "settings.json"
-    hooks_configured = False
-    hook_names = []
+    _cached_settings = None
     if settings_path.exists():
         try:
             with open(settings_path, "r", encoding="utf-8") as f:
-                settings = json.load(f)
-            hooks = settings.get("hooks", {})
-            if hooks:
-                hooks_configured = True
-                hook_names = list(hooks.keys())
+                _cached_settings = json.load(f)
         except (json.JSONDecodeError, PermissionError, OSError):
             pass
+
+    # Hooks
+    hooks_configured = False
+    hook_names = []
+    if _cached_settings:
+        hooks = _cached_settings.get("hooks", {})
+        if hooks:
+            hooks_configured = True
+            hook_names = list(hooks.keys())
     components["hooks"] = {
         "configured": hooks_configured,
         "names": hook_names,
+    }
+
+    # .claude/rules/ directory
+    rules_dir = CLAUDE_DIR / "rules"
+    rules_count = 0
+    rules_tokens = 0
+    rules_files = []
+    rules_always_loaded = 0
+    if rules_dir.exists() and rules_dir.is_dir():
+        for f in sorted(rules_dir.iterdir()):
+            if f.is_file() and f.suffix == ".md":
+                rules_count += 1
+                tokens = estimate_tokens_from_file(f)
+                rules_tokens += tokens
+                has_paths = _has_paths_frontmatter(f)
+                rules_files.append({
+                    "name": f.name,
+                    "tokens": tokens,
+                    "path_scoped": has_paths,
+                })
+                if not has_paths:
+                    rules_always_loaded += 1
+    components["rules"] = {
+        "count": rules_count,
+        "tokens": rules_tokens,
+        "files": rules_files,
+        "always_loaded": rules_always_loaded,
+    }
+
+    # @imports in CLAUDE.md
+    imports_tokens = 0
+    imports_found = []
+    for key in components:
+        if key.startswith("claude_md") and components[key].get("exists"):
+            found = _detect_imports(Path(components[key]["path"]))
+            for imp in found:
+                imports_tokens += imp["tokens"]
+            imports_found.extend(found)
+    components["imports"] = {
+        "count": len(imports_found),
+        "tokens": imports_tokens,
+        "files": imports_found,
+    }
+
+    # CLAUDE.local.md
+    claude_local = cwd / "CLAUDE.local.md"
+    components["claude_local_md"] = {
+        "path": str(claude_local),
+        "exists": claude_local.exists(),
+        "tokens": estimate_tokens_from_file(claude_local) if claude_local.exists() else 0,
+        "lines": count_lines(claude_local) if claude_local.exists() else 0,
+    }
+
+    # settings.json env vars (token-relevant) — use cached settings
+    if _cached_settings:
+        env = _cached_settings.get("env", {})
+        found_vars = {var: env[var] for var in TOKEN_RELEVANT_ENV_VARS if var in env}
+        components["settings_env"] = {"found": found_vars, "settings_exists": True}
+    else:
+        components["settings_env"] = {"found": {}, "settings_exists": settings_path.exists()}
+
+    # settings.local.json existence
+    settings_local = CLAUDE_DIR / "settings.local.json"
+    project_settings_local = cwd / ".claude" / "settings.local.json"
+    components["settings_local"] = {
+        "global_exists": settings_local.exists(),
+        "project_exists": project_settings_local.exists(),
+        "exists": settings_local.exists() or project_settings_local.exists(),
+    }
+
+    # Skill frontmatter quality (collected during skills scan above)
+    components["skill_frontmatter_quality"] = {
+        "verbose_count": len(verbose_skills),
+        "verbose_skills": verbose_skills,
     }
 
     # Fixed overhead
@@ -359,8 +558,15 @@ def calculate_totals(components):
     """Calculate total controllable and estimated overhead."""
     controllable = 0
     fixed = 0
+    # Keys that don't contribute direct token overhead (metadata only)
+    non_token_keys = {
+        "claudeignore", "hooks", "settings_env", "settings_local",
+        "skill_frontmatter_quality",
+    }
 
     for name, info in components.items():
+        if name in non_token_keys:
+            continue
         tokens = info.get("tokens", 0)
         if name == "core_system":
             fixed += tokens
@@ -408,7 +614,8 @@ def take_snapshot(label):
     filepath = SNAPSHOT_DIR / f"snapshot_{label}.json"
     if filepath.exists():
         print(f"  [Note] Overwriting existing snapshot '{label}'")
-    with open(filepath, "w") as f:
+    fd = os.open(str(filepath), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
         json.dump(snapshot, f, indent=2, default=str)
 
     print(f"\n[Token Optimizer] Snapshot '{label}' saved to {filepath}")
@@ -458,11 +665,26 @@ def print_snapshot_summary(snapshot):
     tool_est = mcp.get("tool_count_estimate", 0)
     print(f"  {'MCP deferred tools (est.)':<35s} {mcp_tokens:>6,} tokens  [{srv_count} servers, ~{tool_est} tools]")
 
+    # Rules
+    rules = c.get("rules", {})
+    if rules.get("count", 0) > 0:
+        print(f"  {'Rules (.claude/rules/)':<35s} {rules.get('tokens', 0):>6,} tokens  [{rules.get('count', 0)} files, {rules.get('always_loaded', 0)} always-loaded]")
+
+    # @imports
+    imports = c.get("imports", {})
+    if imports.get("count", 0) > 0:
+        print(f"  {'@imports in CLAUDE.md':<35s} {imports.get('tokens', 0):>6,} tokens  [{imports.get('count', 0)} imports]")
+
+    # CLAUDE.local.md
+    cl = c.get("claude_local_md", {})
+    if cl.get("exists"):
+        print(f"  {'CLAUDE.local.md':<35s} {cl.get('tokens', 0):>6,} tokens  [{cl.get('lines', 0)} lines]")
+
     # Core
     core = c.get("core_system", {})
     print(f"  {'Core system (fixed)':<35s} {core.get('tokens', 0):>6,} tokens")
 
-    print(f"  {'=' * 50}")
+    print(f"  {'=' * 53}")
     print(f"  {'ESTIMATED TOTAL':<35s} {t['estimated_total']:>6,} tokens")
     pct_of_200k = t['estimated_total'] / 200_000 * 100
     print(f"  {'Context used before typing':<35s} {pct_of_200k:>5.1f}% of 200K window")
@@ -483,6 +705,24 @@ def print_snapshot_summary(snapshot):
     print(f"\n  .claudeignore: {ignore_str if ignore_str else 'MISSING'}")
     print(f"  Hooks: {', '.join(hooks.get('names', [])) if hooks.get('configured') else 'NONE'}")
 
+    # Settings env vars
+    settings_env = c.get("settings_env", {})
+    found_vars = settings_env.get("found", {})
+    if found_vars:
+        print(f"  Settings env vars: {', '.join(f'{k}={v}' for k, v in found_vars.items())}")
+
+    # Settings local
+    settings_local = c.get("settings_local", {})
+    if settings_local.get("exists"):
+        print(f"  settings.local.json: Found")
+
+    # Verbose skill descriptions
+    quality = c.get("skill_frontmatter_quality", {})
+    verbose_count = quality.get("verbose_count", 0)
+    if verbose_count > 0:
+        names = [s["name"] for s in quality.get("verbose_skills", [])]
+        print(f"  Verbose skill descriptions (>200 chars): {verbose_count} ({', '.join(names[:5])}{'...' if verbose_count > 5 else ''})")
+
 
 def compare_snapshots():
     """Compare before and after snapshots."""
@@ -497,9 +737,9 @@ def compare_snapshots():
         print("\n[Error] No 'after' snapshot found. Run: python3 measure.py snapshot after")
         return
 
-    with open(before_path) as f:
+    with open(before_path, "r", encoding="utf-8") as f:
         before = json.load(f)
-    with open(after_path) as f:
+    with open(after_path, "r", encoding="utf-8") as f:
         after = json.load(f)
 
     bc = before["components"]
@@ -551,6 +791,27 @@ def compare_snapshots():
         "MCP deferred tools",
         bc.get("mcp_tools", bc.get("mcp_servers", {})).get("tokens", 0),
         ac.get("mcp_tools", ac.get("mcp_servers", {})).get("tokens", 0),
+    ))
+
+    # Rules
+    rows.append((
+        "Rules (.claude/rules/)",
+        bc.get("rules", {}).get("tokens", 0),
+        ac.get("rules", {}).get("tokens", 0),
+    ))
+
+    # @imports
+    rows.append((
+        "@imports",
+        bc.get("imports", {}).get("tokens", 0),
+        ac.get("imports", {}).get("tokens", 0),
+    ))
+
+    # CLAUDE.local.md
+    rows.append((
+        "CLAUDE.local.md",
+        bc.get("claude_local_md", {}).get("tokens", 0),
+        ac.get("claude_local_md", {}).get("tokens", 0),
     ))
 
     total_before = 0
