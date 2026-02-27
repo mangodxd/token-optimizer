@@ -3,7 +3,7 @@
     Token Optimizer: What you control, what you save.
     Realistic "unaudited power user" baseline (~33K) vs optimized (~21K).
     10s loop. Catppuccin Mocha palette. Pure SMIL animations.
-    Sources: Piebald-AI v2.1.59, Leo Wong (12K CLAUDE.md), Anthropic Tool Search docs.
+    Sources: Anthropic Tool Search docs, /context output, community measurements.
     Bar widths: % of 200K context mapped to 680px track.
     Before: 33,000/200K = 16.5% → 112px. After: 21,450/200K = 10.7% → 73px.
   -->

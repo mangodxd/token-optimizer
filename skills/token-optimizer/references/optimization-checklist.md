@@ -236,9 +236,9 @@ These save more than config changes over a full day of usage.
 - [ ] Check `/context` periodically to know your fill level
 - [ ] Or set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70` in settings.json env block to auto-compact at 70%
 
-**Measured**: Matt Pocock showed /compact reducing conversation history from 77K to 4K tokens (18x reduction), freeing context from ~50% to 90%.
+**Measured**: Community measurements show /compact can reduce conversation history from 77K to 4K tokens (18x reduction), freeing context from ~50% to 90%.
 
-**Note**: /clear is often better than /compact when switching tasks. Matt Pocock: "Compacting is useful when you want to preserve the vibes of a conversation. But /clear should be your default."
+**Note**: /clear is often better than /compact when switching tasks. Compacting preserves conversation context as a summary. Clearing is cheaper and gives you a completely fresh window.
 
 ---
 
@@ -291,7 +291,7 @@ Claude: "You're welcome!"
 ### 18. Prompt Caching Awareness
 **Target**: Understand what caching does and doesn't fix
 
-**Confirmed behavior**: Prompt caching IS active by default in Claude Code. Anthropic internal data shows 96-97% cache hit rate in active sessions (source: Anthropic engineer Taric, cited by Abhishek Ray, Feb 2026). The team "treats cache rate like uptime, they declare incidents when it drops."
+**Confirmed behavior**: Prompt caching IS active by default in Claude Code. Anthropic internal data shows 96-97% cache hit rate in active sessions. The team treats cache rate like uptime and declares incidents when it drops.
 
 **Pricing**:
 - Cache reads: 90% cheaper than normal input ($0.30/M vs $3.00/M for Sonnet)
@@ -347,16 +347,16 @@ See `examples/hooks-starter.json` for a ready-to-use template.
 
 ```bash
 # Measure current state
-python3 ~/.claude/token-optimizer/scripts/measure.py report
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py report
 
 # Save snapshot before optimizing
-python3 ~/.claude/token-optimizer/scripts/measure.py snapshot before
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py snapshot before
 
 # After optimization
-python3 ~/.claude/token-optimizer/scripts/measure.py snapshot after
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py snapshot after
 
 # Compare
-python3 ~/.claude/token-optimizer/scripts/measure.py compare
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py compare
 ```
 
 Also track with `/cost` at end of each session and `npx ccusage@latest daily` for historical data.
@@ -419,7 +419,7 @@ Also track with `/cost` at end of each session and `npx ccusage@latest daily` fo
 
 **Behavioral changes** (what the optimizer teaches):
 - Agent model selection (haiku for data): 50-60% on automation
-- /compact at 50-70%: up to 18x reduction in conversation history (Matt Pocock measurement)
+- /compact at 50-70%: up to 18x reduction in conversation history
 - Extended thinking awareness: variable, potentially largest single factor
 - Batching requests: 2-3x on multi-step tasks
 - /clear between topics: prevents stale context accumulation

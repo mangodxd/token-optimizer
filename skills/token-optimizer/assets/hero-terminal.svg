@@ -3,7 +3,7 @@
     Token Optimizer hero – Claude Code terminal running /token-optimizer.
     16s loop. Catppuccin Mocha palette. Pure SMIL animations.
     Numbers: Post-Tool-Search (Feb 2026). ~33K tokens typical unaudited overhead.
-    Sources: Piebald-AI v2.1.59, Anthropic Tool Search docs, Leo Wong, community data.
+    Sources: Anthropic Tool Search docs, /context output, community measurements.
   -->
   <defs>
     <clipPath id="tc"><rect width="800" height="520" rx="10"/></clipPath>

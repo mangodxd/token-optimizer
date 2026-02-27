@@ -2,7 +2,7 @@
 
 **Your config stack silently eats 16% of every context window.** This finds the waste and fixes it.
 
-![Token Optimizer in action](assets/hero-terminal.svg)
+![Token Optimizer in action](skills/token-optimizer/assets/hero-terminal.svg)
 
 ## Install
 
@@ -33,31 +33,21 @@ Prompt caching cuts the **cost** of this by 90% (96-97% cache hit rate per Anthr
 
 A typical power user who has never audited their config: **~33,000 tokens per message (16% of 200K context)**. That's before you type a word.
 
-| What's eating your context | Typical | Source |
-|---------------------------|---------|--------|
-| Core system + tools | 15,000 | Fixed. You can't change this. |
+| What's eating your context | Typical | Why |
+|---------------------------|---------|-----|
+| Core system + tools | 15,000 | Fixed by Claude Code. You can't change this. |
 | Skills (50 accumulated) | 5,000 | ~100 tokens per skill frontmatter |
-| CLAUDE.md (grown organically) | 3,500 | [Leo Wong](https://youtu.be/jWl5O8K2fPk): 700-line CLAUDE.md = 12K tokens |
+| CLAUDE.md (grown organically) | 3,500 | A 250-line CLAUDE.md costs ~3,500 tokens. Grows without auditing. |
 | System reminders (no .claudeignore) | 3,000 | Auto-injected on file edits, budget warnings |
 | MEMORY.md (duplicates CLAUDE.md) | 2,500 | Grows without auditing |
 | MCP deferred tools (~130 tools) | 2,500 | ~15 tokens per deferred tool name |
 | Commands (25 accumulated) | 1,250 | ~50 tokens per command |
 
-### Historical context
-
-In 2025, MCP tool definitions were the worst offender. 50 tools meant 25K+ tokens gone before you typed:
-
-| Setup | Measured Overhead | Source |
-|-------|------------------|--------|
-| Zero MCP, fresh install | ~11,600 tokens | [GitHub #3406](https://github.com/anthropics/claude-code/issues/3406) |
-| 7 MCP servers | 67,300 tokens (34%) | [GitHub #11364](https://github.com/anthropics/claude-code/issues/11364) |
-| Heavy MCP setup | ~82,000 tokens (41%) | [Scott Spence](https://scottspence.com/posts/optimising-mcp-server-context-usage-in-claude-code) |
-
-[Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) (default since Jan 2026) fixed the biggest offender: 85% reduction on MCP overhead. But the rest of the config stack still adds up, and most users never audit it.
+[Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) (default since Jan 2026) already fixed the biggest offender: MCP tool definitions were the worst pre-2026 overhead (50 tools = 25K+ tokens). Tool Search defers them to ~15 tokens each, an [85% reduction](https://www.anthropic.com/engineering/advanced-tool-use). But the rest of the config stack still adds up, and most users never audit it.
 
 ## What It Finds
 
-![Before and after optimization](assets/before-after.svg)
+![Before and after optimization](skills/token-optimizer/assets/before-after.svg)
 
 One command. Six parallel agents audit your setup. You get a prioritized fix list with exact token savings.
 
@@ -90,7 +80,7 @@ Prompt caching is real. It cuts cost by 90% on cached prefixes. But here's what 
 
 **Rate limits.** Cache reads still count toward subscription usage quotas. Smaller overhead = slower quota burn = longer before you hit rate limits.
 
-**Quality degradation.** Claude's performance degrades as context fills. Matt Pocock: "Models tend to perform worse the more things you add to their context." The "lost in the middle" effect means information between the start and end of context gets ignored.
+**Quality degradation.** Model performance degrades as context fills. The "lost in the middle" effect is well-documented: information between the start and end of context gets deprioritized by the attention mechanism. Shorter context = better output quality.
 
 **Multi-agent amplification.** Each subagent inherits your full config overhead. Official docs: "Agent teams use approximately 7x more tokens than standard sessions." 11,550 tokens saved per message x N agents per task.
 
@@ -98,7 +88,7 @@ Prompt caching is real. It cuts cost by 90% on cached prefixes. But here's what 
 
 ## How It Works
 
-![5-phase optimization flow](assets/how-it-works.svg)
+![5-phase optimization flow](skills/token-optimizer/assets/how-it-works.svg)
 
 | Phase | What Happens |
 |-------|-------------|
@@ -112,20 +102,19 @@ Right model for each job. Sonnet for judgment calls, haiku for data gathering, o
 
 ## Sourced Numbers
 
-All referenced stats from [Anthropic docs](https://code.claude.com/docs/en/costs), [Piebald-AI system prompt tracking](https://github.com/Piebald-AI/claude-code-system-prompts) (v2.1.59), and community measurements linked above.
+All stats from [Anthropic official docs](https://code.claude.com/docs/en/costs), [Anthropic engineering blog](https://www.anthropic.com/engineering/advanced-tool-use), and Claude Code's own `/context` output measurements.
 
 | What | Number | Source |
 |------|--------|--------|
-| Core system prompt | ~3K tokens (fixed) | Piebald-AI |
-| Built-in tool definitions | 12-17K tokens (fixed) | Piebald-AI |
-| Each MCP tool (pre-Tool Search) | 300-850 tokens | Community measurement |
-| Each MCP tool (with Tool Search) | ~15 tokens (name only) | Anthropic |
-| Each skill | ~100 tokens (frontmatter) | Piebald-AI |
-| Each command | ~50 tokens | Piebald-AI |
-| [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) MCP reduction | **85%** (Anthropic: 134K to ~8.7K) | [Anthropic Engineering](https://www.anthropic.com/engineering/advanced-tool-use) |
+| Core system prompt | ~3K tokens (fixed) | `/context` output |
+| Built-in tool definitions | 12-17K tokens (fixed) | `/context` output |
+| Each MCP tool (with Tool Search) | ~15 tokens (name only) | [Anthropic](https://www.anthropic.com/engineering/advanced-tool-use) |
+| Each skill | ~100 tokens (frontmatter) | `/context` output |
+| Each command | ~50 tokens | `/context` output |
+| Tool Search MCP reduction | **85%** (134K to ~8.7K) | [Anthropic Engineering](https://www.anthropic.com/engineering/advanced-tool-use) |
 | Prompt caching on stable prefixes | **90% cost reduction** | [Anthropic Docs](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) |
-| Cache hit rate in active sessions | **96-97%** | Anthropic engineer Taric ([Abhishek Ray](https://youtu.be/8J5LRHJ5mDk)) |
-| /compact: conversation history | **77K to 4K tokens** (18x reduction) | [Matt Pocock](https://youtu.be/KNz6hJFLO0k) |
+| Cache hit rate in active sessions | **96-97%** | [Anthropic internal data](https://code.claude.com/docs/en/costs) |
+| /compact: conversation history | **Up to 18x reduction** | Community measurement |
 | Auto-compact default threshold | **95%** (too late, set to 50-70%) | [Official docs](https://code.claude.com/docs/en/settings) |
 | Agent teams token multiplier | **~7x** standard sessions | [Official docs](https://code.claude.com/docs/en/costs) |
 
@@ -134,13 +123,13 @@ All referenced stats from [Anthropic docs](https://code.claude.com/docs/en/costs
 Standalone Python script for measuring token overhead:
 
 ```bash
-python3 ~/.claude/token-optimizer/scripts/measure.py report
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py report
 
 # Save snapshots for comparison
-python3 ~/.claude/token-optimizer/scripts/measure.py snapshot before
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py snapshot before
 # ... make changes ...
-python3 ~/.claude/token-optimizer/scripts/measure.py snapshot after
-python3 ~/.claude/token-optimizer/scripts/measure.py compare
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py snapshot after
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py compare
 ```
 
 No dependencies. Python 3.8+.
@@ -159,6 +148,10 @@ No dependencies. Python 3.8+.
 ```
 skills/token-optimizer/
   SKILL.md                             Orchestrator
+  assets/
+    hero-terminal.svg                  Animated terminal demo
+    before-after.svg                   Token breakdown comparison
+    how-it-works.svg                   5-phase flow diagram
   references/
     agent-prompts.md                   8 agent prompt templates
     implementation-playbook.md         Fix implementation details
@@ -168,7 +161,8 @@ skills/token-optimizer/
     claude-md-optimized.md             Optimized CLAUDE.md template
     claudeignore-template              .claudeignore starter
     hooks-starter.json                 Hook configuration example
-scripts/measure.py                     Before/after measurement tool
+  scripts/
+    measure.py                         Before/after measurement tool
 install.sh                             One-command installer
 ```
 

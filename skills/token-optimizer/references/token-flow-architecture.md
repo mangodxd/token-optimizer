@@ -17,7 +17,7 @@ MESSAGE SEND
 | - System prompt base           ~3,000 tokens        |
 | - Built-in tools (18+)       ~12,000 tokens         |
 |   Read, Write, Edit, Bash, Grep, Glob, Task, etc.  |
-|   (Source: Piebald-AI tracking, v2.1.59)            |
+|   (Source: /context output, Claude Code v2.1.59)     |
 +-----------------------------------------------------+
     |
 +-----------------------------------------------------+
@@ -112,7 +112,7 @@ MCP (ToolSearch +      2,500 tokens  (500 base + ~130 tools x 15)
   deferred names):
 Skills (50):           5,000 tokens
 Commands (25):         1,250 tokens
-CLAUDE.md:             3,500 tokens  (Leo Wong: 700-line CLAUDE.md = 12K)
+CLAUDE.md:             3,500 tokens  (250 lines. A 700-line file = 12K)
 MEMORY.md:             2,500 tokens
 Project CLAUDE.md:       250 tokens
 System reminders:      3,000 tokens  (no .claudeignore)
@@ -290,8 +290,8 @@ Continue until /clear or session end
 
 **Confirmed active in Claude Code** (as of Feb 2026):
 - Prompt caching is ON by default. Disable with `DISABLE_PROMPT_CACHING=1`.
-- Anthropic internal data: 96-97% cache hit rate in active sessions (source: Anthropic engineer Taric)
-- The team "treats cache rate like uptime, they declare incidents when it drops" (Abhishek Ray, Feb 2026)
+- Anthropic internal data: 96-97% cache hit rate in active sessions
+- The team treats cache rate like uptime and declares incidents when it drops
 - Cache order: tools first, then system prompt, then messages (chronological)
 
 **Pricing**:
@@ -424,7 +424,7 @@ Prompt caching means the dollar savings are modest (cached tokens cost 10% of ba
 
 **Plus behavioral changes** (compound across every message):
 - Agent model selection (haiku for data): 50-60% savings on automation
-- /compact at 50-70%: up to 18x reduction in conversation history (Matt Pocock measurement)
+- /compact at 50-70%: up to 18x reduction in conversation history
 - Extended thinking awareness: variable, potentially largest factor
 - Batching requests: 2-3x on multi-step tasks
 

@@ -129,7 +129,7 @@ fi
 
 # ── Make Scripts Executable ───────────────────────────────────
 
-chmod +x "${INSTALL_DIR}/scripts/measure.py" 2>/dev/null || true
+chmod +x "${INSTALL_DIR}/skills/token-optimizer/scripts/measure.py" 2>/dev/null || true
 
 # ── Summary ───────────────────────────────────────────────────
 
@@ -143,7 +143,7 @@ echo "  Commit:    ${COMMIT}"
 echo "  Skill:     /token-optimizer"
 echo ""
 echo "  Measure current overhead:"
-echo "    python3 ${INSTALL_DIR}/scripts/measure.py report"
+echo "    python3 ${INSTALL_DIR}/skills/token-optimizer/scripts/measure.py report"
 echo ""
 echo "  Start a Claude Code session and run:"
 echo "    /token-optimizer"
