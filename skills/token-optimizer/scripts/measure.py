@@ -737,10 +737,31 @@ def compare_snapshots():
         print("\n[Error] No 'after' snapshot found. Run: python3 measure.py snapshot after")
         return
 
-    with open(before_path, "r", encoding="utf-8") as f:
-        before = json.load(f)
-    with open(after_path, "r", encoding="utf-8") as f:
-        after = json.load(f)
+    try:
+        with open(before_path, "r", encoding="utf-8") as f:
+            before = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"\n[Error] Cannot read 'before' snapshot: {e}")
+        print(f"  Re-run: python3 measure.py snapshot before")
+        return
+
+    try:
+        with open(after_path, "r", encoding="utf-8") as f:
+            after = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"\n[Error] Cannot read 'after' snapshot: {e}")
+        print(f"  Re-run: python3 measure.py snapshot after")
+        return
+
+    # Warn if 'before' snapshot is stale (>24h old)
+    try:
+        before_ts = datetime.fromisoformat(before["timestamp"])
+        age_seconds = (datetime.now() - before_ts).total_seconds()
+        if age_seconds > 86400:
+            age_days = int(age_seconds / 86400)
+            print(f"\n  [Warning] 'before' snapshot is {age_days}d old. Consider re-taking it.")
+    except (KeyError, ValueError):
+        pass  # Missing or unparseable timestamp, not critical
 
     bc = before["components"]
     ac = after["components"]

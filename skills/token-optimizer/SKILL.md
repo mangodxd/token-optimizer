@@ -9,7 +9,7 @@ description: |
 
 # Token Optimizer — See Where Your Context Window Goes. Get It Back.
 
-You are a token optimization specialist. Audit a Claude Code setup, identify context window waste, implement fixes, and measure savings.
+Token optimization specialist. Audits a Claude Code setup, identifies context window waste, implements fixes, and measures savings.
 
 **Target**: 5-15% context recovery through config cleanup (more for heavier setups), up to 25%+ with autocompact management. Plus behavioral optimizations that compound across every session.
 
@@ -41,11 +41,18 @@ for memfile in ~/.claude/projects/*/memory/MEMORY.md; do
     cp "$memfile" "$BACKUP_DIR/MEMORY-${projname}.md" 2>/dev/null || true
   fi
 done
+
+# Verify backup is non-empty
+if [ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
+  echo "[Warning] Backup directory is empty. No files were backed up."
+  echo "This may mean you have a fresh setup (nothing to back up) or a permissions issue."
+fi
 ```
 
 3. **Create coordination folder**:
 ```bash
 COORD_PATH=$(mktemp -d /tmp/token-optimizer-XXXXXXXXXX)
+[ -d "$COORD_PATH" ] || { echo "[Error] Failed to create coordination folder. Check /tmp permissions."; return 1; }
 mkdir -p "$COORD_PATH"/{audit,analysis,plan,verification}
 ```
 
@@ -87,6 +94,12 @@ If any are missing, note it and proceed with available data. Do NOT re-dispatch 
 Read the **Synthesis Agent** prompt from `references/agent-prompts.md`.
 
 Dispatch with `model="opus"` (fallback: `model="sonnet"` if Opus unavailable). It reads all audit files and writes a prioritized plan to `{COORD_PATH}/analysis/optimization-plan.md`.
+
+**Validation**: After the synthesis agent completes, verify output exists:
+```bash
+[ -s "$COORD_PATH/analysis/optimization-plan.md" ] || echo "[Warning] Synthesis output missing or empty. Presenting raw audit files instead."
+```
+If missing, present the individual `audit/*.md` files directly to the user. Do not proceed to Phase 4 without user review of either the synthesis or the raw findings.
 
 ---
 
@@ -191,6 +204,32 @@ NEXT STEPS (Behavioral)
 - **No skills directory**: Report 0 tokens, note as "fresh setup."
 - **measure.py not found**: Fall back to manual estimation (line count x 15 for prose, x 8 for YAML).
 - **Coordination folder write failure**: Abort and report the error. Do not proceed without audit storage.
+- **Backup write failure**: If `ls "$BACKUP_DIR"` shows 0 files after Phase 0 backup, warn user and ask whether to proceed without backup. Do not silently continue.
+- **mktemp failure**: If `COORD_PATH` directory does not exist after creation, print error and abort. Check /tmp permissions.
+- **Synthesis agent failure**: If `analysis/optimization-plan.md` is missing or empty after Phase 2, present raw audit files to user instead. Do not proceed to Phase 4 blindly.
+- **Verification agent failure**: If Phase 5 agent fails, fall back to running `measure.py snapshot after` + `measure.py compare` directly in the shell.
+- **Snapshot file corrupt**: If `compare` fails with a JSON error, re-run `measure.py snapshot [label]` to regenerate the corrupt file.
+- **Stale snapshot warning**: If the "before" snapshot is >24h old when running `compare`, a warning is printed. Consider re-taking it for accurate results.
+
+---
+
+## Restoring Backups
+
+If something goes wrong, restore from the backup created in Phase 0:
+```bash
+# Find your most recent backup
+ls -lt ~/.claude/_backups/token-optimizer-* | head -5
+
+# Restore specific files (replace TIMESTAMP with your backup folder name)
+BACKUP="$HOME/.claude/_backups/token-optimizer-TIMESTAMP"
+cp "$BACKUP/CLAUDE.md" ~/.claude/CLAUDE.md
+cp "$BACKUP/settings.json" ~/.claude/settings.json
+cp -r "$BACKUP/commands" ~/.claude/commands
+# MEMORY.md files have the project name in the filename
+cp "$BACKUP/MEMORY-*.md" ~/.claude/projects/*/memory/MEMORY.md
+```
+
+Backups are never automatically deleted. They accumulate in `~/.claude/_backups/`.
 
 ---
 

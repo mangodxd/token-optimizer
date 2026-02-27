@@ -251,3 +251,6 @@ Generate and add a compact instructions section to CLAUDE.md.
 | No skills directory | "No skills found. Setup is minimal (good for tokens). Focus on CLAUDE.md + MCP." |
 | Can't measure MCP tools | "Deferred tools not visible in this session. Skip MCP audit or check Desktop config manually." |
 | User says 'skip verification' | "Noted. Skipping verification. Recommend running /cost before and after to measure actual savings." |
+| Backup is empty/missing | "Backup directory appears empty. This could mean a fresh setup or a write failure. Proceeding without backup, but will not modify any files without explicit user confirmation for each change." |
+| File write fails mid-implementation | "Write failed for [file]. Restoring from backup. Check disk space and permissions." Present the restore command from the Restoring Backups section. |
+| Synthesis output missing | "Synthesis agent did not produce output. Showing raw audit findings instead." Present the individual audit files from `$COORD_PATH/audit/` for user review. |
