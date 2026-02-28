@@ -1,0 +1,1788 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Token Optimizer Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;500&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ========== RESET ========== */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; outline: none; }
+
+:root {
+  --c-bg: #0a0b10;
+  --c-surface: #13151a;
+  --c-surface-hover: #1c1f26;
+  --c-accent-cyan: #00f0ff;
+  --c-accent-blue: #0066ff;
+  --c-accent-glow: rgba(0, 240, 255, 0.4);
+  --c-text-main: #ffffff;
+  --c-text-dim: #7d8ca3;
+  --c-border: rgba(255, 255, 255, 0.08);
+  --font-sans: 'Space Grotesk', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --s-1: 4px; --s-2: 8px; --s-3: 16px; --s-4: 24px; --s-5: 32px; --s-6: 64px;
+  --glow-sm: 0 0 10px var(--c-accent-glow);
+  --glow-text: 0 0 8px rgba(0, 240, 255, 0.6);
+}
+
+body {
+  background-color: var(--c-bg);
+  color: var(--c-text-main);
+  font-family: var(--font-sans);
+  font-weight: 300;
+  font-size: 16px;
+  line-height: 1.4;
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  background-image: radial-gradient(circle at 50% 0%, #1a253a 0%, var(--c-bg) 60%);
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0; left: 0; width: 100%; height: 100%;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+h1, h2, h3, h4 { font-weight: 400; }
+
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--c-bg); }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #555; }
+
+/* ========== 3-COLUMN LAYOUT ========== */
+.layout {
+  display: grid;
+  grid-template-columns: 260px 1fr 340px;
+  height: 100vh;
+  width: 100vw;
+  max-width: 1800px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 1;
+}
+
+/* ========== NAV COLUMN ========== */
+.nav-col {
+  padding: var(--s-4);
+  border-right: 1px solid var(--c-border);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  background: linear-gradient(90deg, transparent, rgba(0,0,0,0.2));
+  backdrop-filter: blur(10px);
+}
+
+.brand {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  font-size: 24px;
+  margin-bottom: var(--s-6);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  color: var(--c-text-main);
+  letter-spacing: -0.02em;
+}
+
+.brand span {
+  width: 12px; height: 12px;
+  background: var(--c-accent-cyan);
+  border-radius: 2px;
+  display: inline-block;
+  box-shadow: var(--glow-sm);
+}
+
+.nav-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  padding: 12px var(--s-2);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: all 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+  text-decoration: none;
+  color: var(--c-text-main);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 13px;
+  border-left: 2px solid transparent;
+}
+
+.nav-item:hover, .nav-item.active {
+  opacity: 1;
+  background: linear-gradient(90deg, rgba(0,240,255,0.05), transparent);
+  border-left-color: var(--c-accent-cyan);
+  text-shadow: var(--glow-text);
+}
+
+.nav-item.active { font-weight: 600; }
+
+.nav-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--c-accent-cyan);
+  border: 1px solid var(--c-accent-cyan);
+  padding: 0 4px;
+  border-radius: 2px;
+  text-shadow: 0 0 5px var(--c-accent-cyan);
+}
+
+.user-profile {
+  font-size: 13px;
+  color: var(--c-text-dim);
+  border-top: 1px solid var(--c-border);
+  padding-top: var(--s-3);
+  font-family: var(--font-mono);
+}
+
+.user-profile i {
+  font-family: var(--font-mono);
+  font-style: italic;
+  color: var(--c-accent-cyan);
+}
+
+/* ========== MAIN COLUMN ========== */
+.main-col {
+  padding: var(--s-5);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-5);
+}
+
+.header { margin-bottom: var(--s-3); }
+
+.label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  font-weight: 500;
+}
+
+.header h1 {
+  font-family: var(--font-sans);
+  font-weight: 300;
+  font-size: 48px;
+  margin: var(--s-2) 0;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  background: linear-gradient(180deg, #fff, #aaa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.header p {
+  font-size: 12px;
+  color: var(--c-text-dim);
+  max-width: 460px;
+  line-height: 1.6;
+  font-family: var(--font-mono);
+}
+
+/* ========== CARDS ========== */
+.card {
+  border: 1px solid var(--c-border);
+  padding: var(--s-4);
+  display: flex;
+  flex-direction: column;
+  background: var(--c-surface);
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  transition: transform 0.2s, border-color 0.2s;
+}
+
+.card:hover { border-color: rgba(0,240,255,0.3); }
+
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--c-accent-cyan), transparent);
+  opacity: 0.5;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--s-4);
+  border-bottom: 1px solid var(--c-border);
+  padding-bottom: var(--s-2);
+}
+
+.card-header span:first-child {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: 0.05em;
+  color: var(--c-text-main);
+}
+
+.metric-large {
+  font-family: var(--font-mono);
+  font-weight: 300;
+  font-size: 64px;
+  line-height: 0.9;
+  margin-bottom: var(--s-3);
+  margin-top: var(--s-2);
+  color: var(--c-text-main);
+  text-shadow: 0 0 20px rgba(255,255,255,0.2);
+}
+
+.metric-sub {
+  font-size: 18px;
+  color: var(--c-text-dim);
+}
+
+.metric-sub span {
+  color: var(--c-accent-cyan);
+  text-shadow: var(--glow-text);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--s-4);
+}
+
+.card.wide { grid-column: span 2; }
+
+/* Mini stat card within grid */
+.mini-stat {
+  font-size: 32px; font-weight: 300;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+}
+
+.mini-label {
+  font-size: 16px;
+  color: var(--c-text-dim);
+  font-family: var(--font-sans);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Bar chart */
+.chart-container {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 10px;
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-family: var(--font-mono);
+}
+
+.bar-label {
+  width: 88px;
+  color: var(--c-text-dim);
+  flex-shrink: 0;
+  text-align: right;
+}
+
+.bar-track {
+  flex: 1;
+  height: 16px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--c-accent-cyan), rgba(0,255,255,0.1));
+  border-radius: 3px;
+  opacity: 0.6;
+  transition: width 0.5s ease;
+}
+
+.bar-fill.fixed {
+  background: linear-gradient(90deg, rgba(255,255,255,0.2), rgba(255,255,255,0.05));
+  opacity: 0.4;
+}
+
+.bar-value {
+  width: 50px;
+  color: var(--c-text-dim);
+  flex-shrink: 0;
+  text-align: right;
+  font-size: 14px;
+}
+
+/* Component breakdown table */
+.opt-grid {
+  display: grid;
+  grid-template-columns: 1fr 100px 100px;
+  gap: 16px;
+  font-size: 15px;
+  font-family: var(--font-sans);
+  letter-spacing: 0.05em;
+}
+
+.opt-head {
+  color: var(--c-text-dim);
+  text-transform: uppercase;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  margin-bottom: 8px;
+}
+
+.opt-row {
+  padding-top: 12px;
+  border-top: 1px solid var(--c-border);
+  color: var(--c-text-main);
+}
+
+/* ========== SECTION VIEW (Category Items) ========== */
+.section-header {
+  margin-bottom: var(--s-4);
+}
+
+.section-header h1 {
+  font-family: var(--font-sans);
+  font-weight: 300;
+  font-size: 48px;
+  margin: var(--s-2) 0;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  background: linear-gradient(180deg, #fff, #aaa);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.section-header p {
+  font-size: 18px;
+  color: var(--c-text-dim);
+  max-width: 520px;
+  line-height: 1.6;
+  font-family: var(--font-mono);
+}
+
+.select-all-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--s-2) 0;
+  margin-bottom: var(--s-3);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.select-all-row span {
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--c-text-dim);
+  font-family: var(--font-sans);
+}
+
+/* ========== SETTING ROW (individual items) ========== */
+.setting-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--s-2) 0;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.setting-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}
+
+.setting-info .setting-title {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 18px;
+  color: var(--c-text-main);
+}
+
+.setting-desc {
+  font-size: 16px;
+  color: var(--c-text-dim);
+  letter-spacing: 0;
+  font-family: var(--font-sans);
+}
+
+.setting-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.status-badge {
+  display: inline-block;
+  font-size: 11px;
+  border: 1px solid var(--c-accent-cyan);
+  color: var(--c-accent-cyan);
+  background: rgba(0,240,255,0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  box-shadow: 0 0 5px rgba(0,240,255,0.2);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+/* ========== TOGGLE (exact from reference) ========== */
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 36px;
+  height: 20px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-color: rgba(255,255,255,0.1);
+  border: 1px solid var(--c-border);
+  transition: .3s;
+  border-radius: 20px;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 14px;
+  width: 14px;
+  left: 2px;
+  bottom: 2px;
+  background-color: var(--c-text-dim);
+  transition: .3s cubic-bezier(0.4, 0.0, 0.2, 1);
+  border-radius: 50%;
+}
+
+input:checked + .slider {
+  background-color: rgba(0,240,255,0.15);
+  border-color: var(--c-accent-cyan);
+  box-shadow: 0 0 10px rgba(0,240,255,0.2);
+}
+
+input:checked + .slider:before {
+  transform: translateX(16px);
+  background-color: var(--c-accent-cyan);
+  box-shadow: 0 0 8px var(--c-accent-cyan);
+}
+
+/* ========== RIGHT PANEL ========== */
+.config-col {
+  border-left: 1px solid var(--c-border);
+  padding: var(--s-4);
+  background: rgba(10,11,16,0.8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+  overflow-y: auto;
+}
+
+.section-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  margin-bottom: var(--s-3);
+  color: var(--c-text-dim);
+  padding-bottom: var(--s-1);
+  border-bottom: 1px solid var(--c-border);
+  text-align: left;
+  font-family: var(--font-mono);
+}
+
+.summary-metric {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--c-text-dim);
+  margin-bottom: var(--s-3);
+}
+
+.summary-metric .num {
+  color: var(--c-accent-cyan);
+  text-shadow: var(--glow-text);
+}
+
+.selected-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.selected-item {
+  background: linear-gradient(135deg, var(--c-surface-hover), var(--c-surface));
+  padding: 10px var(--s-3);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  font-size: 15px;
+  color: var(--c-text-main);
+  font-family: var(--font-sans);
+  line-height: 1.4;
+}
+
+.notes-area {
+  width: 100%;
+  min-height: 60px;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: var(--s-2) var(--s-3);
+  color: var(--c-text-main);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.notes-area::placeholder { color: var(--c-text-dim); }
+.notes-area:focus { border-color: var(--c-accent-cyan); }
+
+.apply-btn {
+  width: 100%;
+  background: transparent;
+  border: 1px solid var(--c-text-dim);
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: 0.2s;
+  border-radius: 4px;
+}
+
+.apply-btn:hover {
+  border-color: var(--c-accent-cyan);
+  color: var(--c-accent-cyan);
+  box-shadow: 0 0 10px rgba(0,240,255,0.2);
+}
+
+.apply-btn.copied {
+  border-color: #10b981;
+  color: #10b981;
+  box-shadow: 0 0 10px rgba(16,185,129,0.3);
+}
+
+.apply-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.version-footer {
+  margin-top: auto;
+  opacity: 0.4;
+  font-size: 11px;
+  text-align: center;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.social-icons {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.social-link {
+  color: var(--c-text-dim);
+  opacity: 0.7;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+}
+
+.social-link:hover {
+  color: var(--c-accent-cyan);
+  opacity: 1;
+}
+
+/* ========== VIEW SWITCHING ========== */
+.view { display: none; }
+.view.active { display: flex; flex-direction: column; gap: var(--s-5); }
+
+.empty-state {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--c-text-dim);
+  font-size: 16px;
+  font-family: var(--font-mono);
+}
+
+/* ========== EXPANDABLE SETTING ROWS ========== */
+.setting-row {
+  cursor: pointer;
+  position: relative;
+}
+
+.setting-row .chevron {
+  font-size: 12px;
+  color: var(--c-text-dim);
+  transition: transform 0.3s;
+  margin-left: 8px;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.setting-row.expanded .chevron {
+  transform: rotate(180deg);
+}
+
+.setting-detail {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.setting-detail-inner {
+  background: var(--c-surface-hover);
+  padding: var(--s-3) var(--s-4);
+  border-radius: 8px;
+  margin: var(--s-2) 0 var(--s-3) 0;
+}
+
+.setting-detail .detail-heading {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  margin: var(--s-3) 0 var(--s-1) 0;
+}
+
+.setting-detail .detail-heading:first-child {
+  margin-top: 0;
+}
+
+.setting-detail .detail-text {
+  font-size: 16px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  line-height: 1.6;
+}
+
+/* ========== EXPANDABLE COMPONENT CARDS ========== */
+.component-cards {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-2);
+}
+
+.component-card {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  background: var(--c-surface);
+  cursor: pointer;
+  transition: border-color 0.2s;
+  overflow: hidden;
+}
+
+.component-card:hover {
+  border-color: rgba(0, 240, 255, 0.2);
+}
+
+.component-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--s-3) var(--s-4);
+}
+
+.component-card-header .cc-name {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 18px;
+  color: var(--c-text-main);
+}
+
+.component-card-header .cc-right {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.component-card-header .cc-tokens {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--c-accent-cyan);
+  text-shadow: var(--glow-text);
+}
+
+.component-card-header .chevron {
+  font-size: 12px;
+  color: var(--c-text-dim);
+  transition: transform 0.3s;
+}
+
+.component-card.expanded .chevron {
+  transform: rotate(180deg);
+}
+
+.component-card-sub {
+  padding: 0 var(--s-4) var(--s-2);
+  font-size: 16px;
+  color: var(--c-text-dim);
+  font-family: var(--font-sans);
+}
+
+.component-card-detail {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.component-card-detail-inner {
+  background: var(--c-surface-hover);
+  margin: 0 var(--s-3) var(--s-3);
+  padding: var(--s-3) var(--s-4);
+  border-radius: 8px;
+}
+
+.component-card-detail .detail-heading {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  margin: var(--s-3) 0 var(--s-1) 0;
+}
+
+.component-card-detail .detail-heading:first-child {
+  margin-top: 0;
+}
+
+.component-card-detail .detail-text {
+  font-size: 16px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  line-height: 1.6;
+}
+
+.component-card-detail .top-consumer {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+}
+
+.component-card-detail .top-consumer .tc-name {
+  color: var(--c-text-main);
+}
+
+.component-card-detail .issue-item {
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  line-height: 1.6;
+  padding-left: var(--s-3);
+  position: relative;
+}
+
+.component-card-detail .issue-item::before {
+  content: "\2022";
+  position: absolute;
+  left: 4px;
+  color: var(--c-text-dim);
+}
+
+.component-card-detail .related-link {
+  display: block;
+  font-size: 15px;
+  font-family: var(--font-mono);
+  color: var(--c-accent-cyan);
+  cursor: pointer;
+  padding: 2px 0;
+  transition: text-shadow 0.2s;
+  text-decoration: none;
+}
+
+.component-card-detail .related-link:hover {
+  text-shadow: var(--glow-text);
+}
+
+/* ========== RECOMMENDATION ITEMS (Habits) ========== */
+.rec-item {
+  background: linear-gradient(135deg, var(--c-surface-hover), var(--c-surface));
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  padding: var(--s-4);
+  margin-bottom: var(--s-3);
+}
+
+.rec-item .rec-title {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  font-size: 18px;
+  color: var(--c-text-main);
+  margin-bottom: var(--s-2);
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+}
+
+.rec-item .rec-title .rec-icon {
+  color: var(--c-accent-cyan);
+  font-size: 14px;
+}
+
+.rec-item .rec-body {
+  font-size: 16px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  line-height: 1.6;
+  margin-bottom: var(--s-3);
+}
+
+.rec-item .rec-impact-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--c-text-dim);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  margin-bottom: var(--s-1);
+}
+
+.rec-item .rec-impact {
+  font-size: 16px;
+  font-family: var(--font-mono);
+  color: var(--c-text-dim);
+  line-height: 1.6;
+}
+
+/* ========== RESPONSIVE ========== */
+@media (max-width: 1024px) {
+  .layout { grid-template-columns: 200px 1fr; }
+  .config-col { display: none; }
+}
+
+@media (max-width: 768px) {
+  .layout { display: block; }
+  .nav-col {
+    border-right: none;
+    border-bottom: 1px solid var(--c-border);
+    padding: var(--s-3);
+  }
+  .main-col { padding: var(--s-3); }
+  .dashboard-grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<!-- Data injection point: measure.py replaces 'null' with real JSON -->
+<script>
+window.__TOKEN_DATA__ = null;
+</script>
+
+<div class="layout">
+  <!-- NAV -->
+  <nav class="nav-col">
+    <div>
+      <div class="brand"><span></span> Token Optimizer</div>
+      <div class="nav-menu">
+        <a class="nav-item active" data-view="overview">Overview</a>
+        <a class="nav-item" data-view="quick">Quick Wins <span class="nav-badge" id="badge-quick"></span></a>
+        <a class="nav-item" data-view="medium">Medium <span class="nav-badge" id="badge-medium"></span></a>
+        <a class="nav-item" data-view="deep">Deep <span class="nav-badge" id="badge-deep"></span></a>
+        <a class="nav-item" data-view="habits">Habits <span class="nav-badge" id="badge-habits"></span></a>
+      </div>
+    </div>
+    <div class="user-profile">workspace: <i id="nav-date"></i></div>
+  </nav>
+
+  <!-- MAIN -->
+  <main class="main-col">
+    <!-- Overview View -->
+    <div class="view active" id="view-overview">
+      <header class="header">
+        <div class="label">Token Overhead Analysis</div>
+        <h1>Overview</h1>
+        <p>Your current config overhead, measured against a 200K context window.</p>
+      </header>
+
+      <div class="card wide" id="hero-card">
+        <div class="card-header">
+          <span>Total Session Overhead</span>
+          <span class="label" id="hero-tag"></span>
+        </div>
+        <div class="metric-large" id="hero-total"></div>
+        <div class="metric-sub" id="hero-sub"></div>
+      </div>
+
+      <div class="dashboard-grid">
+        <div class="card" id="card-saturation">
+          <div class="card-header"><span>Before You Start</span></div>
+          <div class="mini-stat" id="stat-pct"></div>
+          <div class="chart-container" id="chart-bars"></div>
+          <p class="label" style="margin-top: var(--s-2); line-height: 1.5; text-transform: none; font-size: 15px; letter-spacing: 0; color: var(--c-text-dim); text-shadow: none;" id="sat-desc"></p>
+        </div>
+        <div class="card" id="card-potential">
+          <div class="card-header"><span>What You'd Save</span></div>
+          <div class="mini-stat" id="stat-potential"></div>
+          <p class="label" style="margin-top: auto; line-height: 1.5; text-transform: none; font-size: 15px; letter-spacing: 0; color: var(--c-text-dim); text-shadow: none;" id="potential-desc"></p>
+        </div>
+      </div>
+
+      <div class="card wide" id="breakdown-card">
+        <div class="card-header">
+          <span>Component Breakdown</span>
+          <span class="label">by source</span>
+        </div>
+        <div class="opt-grid" id="breakdown-grid"></div>
+      </div>
+    </div>
+
+    <!-- Quick Wins View -->
+    <div class="view" id="view-quick"></div>
+    <!-- Medium View -->
+    <div class="view" id="view-medium"></div>
+    <!-- Deep View -->
+    <div class="view" id="view-deep"></div>
+    <!-- Habits View -->
+    <div class="view" id="view-habits"></div>
+  </main>
+
+  <!-- RIGHT PANEL -->
+  <aside class="config-col">
+    <div class="section-title">Selection Summary</div>
+    <div class="summary-metric"><span class="num" id="r-count">0</span> items &middot; ~<span class="num" id="r-tokens">0</span> tok</div>
+
+    <div class="section-title">Selected</div>
+    <div class="selected-list" id="selected-list">
+      <div class="empty-state" id="empty-selected">Toggle items to build your optimization prompt.</div>
+    </div>
+
+    <div class="section-title">Notes</div>
+    <textarea class="notes-area" id="notes-input" placeholder="Keep gsd, skip n8n cluster..."></textarea>
+
+    <button class="apply-btn" id="copy-btn" disabled>Copy Prompt</button>
+
+    <div class="version-footer">
+      <div>token_optimizer v1.0</div>
+      <div class="social-icons">
+        <a href="https://github.com/alexgreensh/token-optimizer" target="_blank" rel="noopener" title="GitHub" class="social-link">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0024 12c0-6.63-5.37-12-12-12z"/></svg>
+        </a>
+        <a href="https://linkedin.com/in/alexgreensh" target="_blank" rel="noopener" title="LinkedIn" class="social-link">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+        </a>
+      </div>
+    </div>
+  </aside>
+</div>
+
+<script>
+/* ========== PLAN PARSER ========== */
+function parsePlan(planMd) {
+  if (!planMd) return [];
+  var items = [], group = 'Other', lines = planMd.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i];
+    if (line.match(/^##\s+Quick Wins/i)) { group = 'Quick Wins'; continue; }
+    if (line.match(/^##\s+Medium Effort/i)) { group = 'Medium Effort'; continue; }
+    if (line.match(/^##\s+Deep Optim/i)) { group = 'Deep'; continue; }
+    if (line.match(/^##\s+Behavioral/i)) { group = 'Behavioral'; continue; }
+    if (line.match(/^##\s+Projected/i)) break;
+
+    var m = line.match(/^-\s+\[\s*\]\s+\*\*(.+?)\*\*[:\s]*(.*)$/);
+    if (!m) continue;
+    var title = m[1], desc = m[2] || '', tokens = 0;
+    var tk = desc.match(/~([\d,]+)\s*tokens/i);
+    if (tk) tokens = parseInt(tk[1].replace(/,/g,''), 10);
+    var fullDesc = desc;
+    while (i + 1 < lines.length && lines[i+1].match(/^\s{2,}/) && !lines[i+1].match(/^-\s/)) {
+      i++;
+      fullDesc += ' ' + lines[i].trim();
+      if (!tokens) { tk = lines[i].match(/~([\d,]+)\s*tokens/i); if (tk) tokens = parseInt(tk[1].replace(/,/g,''),10); }
+    }
+    if (!tokens) {
+      var peek = lines.slice(i+1, Math.min(i+8, lines.length)).join(' ');
+      var tm = peek.match(/Total savings?:\s*~([\d,]+)\s*tokens/i);
+      if (tm) tokens = parseInt(tm[1].replace(/,/g,''),10);
+    }
+    var firstPeriod = fullDesc.indexOf('. ');
+    var shortDesc = firstPeriod > 0 ? fullDesc.slice(0, firstPeriod + 1) : fullDesc.slice(0, 80);
+    var detail = firstPeriod > 0 ? fullDesc.slice(firstPeriod + 2) : '';
+    items.push({ group: group, title: title, shortDesc: shortDesc, detail: detail, fullDesc: fullDesc, tokens: tokens, checked: false });
+  }
+  return items;
+}
+
+function esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* ========== AUDIT CONTENT PARSER ========== */
+function extractFindings(auditMd) {
+  if (!auditMd) return { summary: '', findings: [], items: [] };
+  var lines = auditMd.split('\n');
+  var findings = [], tableItems = [];
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (line.match(/^[-\u2022]\s+/)) {
+      findings.push(line.replace(/^[-\u2022]\s+/, ''));
+    }
+    if (line.indexOf('|') === 0 && !line.match(/^[\|\s\-:]+$/)) {
+      var cells = line.split('|').filter(function(c) { return c.trim(); });
+      if (cells.length >= 2) tableItems.push(cells.map(function(c) { return c.trim(); }));
+    }
+  }
+  return { summary: lines[0] || '', findings: findings, items: tableItems };
+}
+
+/* ========== COMPONENT DETAILS BUILDER ========== */
+function getComponentDetails(data) {
+  var c = data.snapshot.components;
+  var cd = data.snapshot.component_details || {};
+
+  var ct = 0;
+  for (var k in c) { if (k.indexOf('claude_md') === 0 && c[k] && c[k].tokens) ct += c[k].tokens; }
+
+  var components = [
+    {
+      key: 'claude_md', name: 'CLAUDE.md', tokens: ct,
+      sub: (c.claude_md_global ? c.claude_md_global.lines : '?') + ' lines across global + project files',
+      what: 'Your CLAUDE.md files are loaded at the start of every session. They contain personality rules, key paths, workflow instructions, and quality gates that shape every Claude response.',
+      top: [], issues: [],
+      related: [
+        { title: 'Condense Multi-Agent Coordination', section: 'quick' },
+        { title: 'Split CLAUDE.md into modular imports', section: 'deep' }
+      ]
+    },
+    {
+      key: 'memory_md', name: 'MEMORY.md',
+      tokens: c.memory_md ? c.memory_md.tokens : 0,
+      sub: (c.memory_md ? c.memory_md.lines : '?') + ' lines loaded every session',
+      what: 'Auto-memory file loaded into every conversation context. Contains accumulated patterns, decisions, and system notes. Lines after 200 are truncated but still counted.',
+      top: [], issues: [],
+      related: [
+        { title: 'Delete competitive landscape', section: 'quick' },
+        { title: 'Condense 5 verbose sections', section: 'medium' },
+        { title: 'Restructure as index', section: 'deep' }
+      ]
+    },
+    {
+      key: 'skills', name: 'Skills',
+      tokens: c.skills ? c.skills.tokens : 0,
+      sub: (c.skills ? c.skills.count : '?') + ' user skills loaded at startup',
+      what: "Every skill's SKILL.md frontmatter (name + description) is loaded into the tool menu at session start. The description length directly controls token cost.",
+      top: [], issues: [],
+      related: [
+        { title: 'Trim top-10 skill descriptions', section: 'medium' },
+        { title: 'Remove broken symlinks', section: 'quick' },
+        { title: 'Remove irrelevant CE skills', section: 'deep' }
+      ]
+    },
+    {
+      key: 'commands', name: 'Commands',
+      tokens: c.commands ? c.commands.tokens : 0,
+      sub: (c.commands ? c.commands.count : '?') + ' slash commands registered',
+      what: "Each command's COMMAND.md file is parsed and registered. Commands with long descriptions consume tokens even if rarely used.",
+      top: [], issues: [],
+      related: [
+        { title: 'Merge overlapping commands', section: 'deep' },
+        { title: 'Consolidate sync commands', section: 'medium' }
+      ]
+    },
+    {
+      key: 'mcp_tools', name: 'MCP Tools',
+      tokens: c.mcp_tools ? c.mcp_tools.tokens : 0,
+      sub: (c.mcp_tools ? c.mcp_tools.server_count : '?') + ' servers, ~' + (c.mcp_tools ? c.mcp_tools.tool_count_estimate : '?') + ' tools',
+      what: "MCP server tool definitions are loaded when servers connect. Each tool's name, description, and parameter schema contribute to token cost.",
+      top: [], issues: [],
+      related: [
+        { title: 'Merge duplicate MCP servers', section: 'medium' }
+      ]
+    },
+    {
+      key: 'core_system', name: 'Core System',
+      tokens: c.core_system ? c.core_system.tokens : 0,
+      sub: 'Fixed overhead, not optimizable',
+      what: "Claude Code's built-in system prompt, tool definitions, safety instructions, and MCP protocol overhead. This is fixed by Anthropic and cannot be reduced by user configuration changes.",
+      top: [], issues: [], related: []
+    }
+  ];
+
+  // Override with detailed data if available
+  components.forEach(function(comp) {
+    var d = cd[comp.key];
+    if (d) {
+      if (d.what) comp.what = d.what;
+      if (d.sub) comp.sub = d.sub;
+      if (d.top) comp.top = d.top;
+      if (d.issues) comp.issues = d.issues;
+      if (d.related) comp.related = d.related;
+    }
+  });
+
+  return components;
+}
+
+/* ========== DASHBOARD CONTROLLER ========== */
+var DB = (function() {
+  var data, items = [];
+  var groupMap = { 'Quick Wins': 'quick', 'Medium Effort': 'medium', 'Deep': 'deep', 'Behavioral': 'habits' };
+  var groupLabels = { quick: 'Quick Wins', medium: 'Medium Effort', deep: 'Deep Optimization', habits: 'Habits & Behavioral' };
+  var groupDescs = {
+    quick: 'Low-effort, high-impact changes. Safe to apply immediately.',
+    medium: 'Moderate effort with significant savings. Review before applying.',
+    deep: 'Structural changes requiring careful planning.',
+    habits: 'Free changes with the highest cumulative impact. These are YOUR habits, not code edits.'
+  };
+
+  function init(d) {
+    data = d;
+    items = parsePlan(d.plan);
+    // Map groups and assign indices
+    items.forEach(function(it, i) {
+      it._i = i;
+      it.section = groupMap[it.group] || 'habits';
+    });
+    // Pre-check Quick Wins
+    items.forEach(function(it) { if (it.section === 'quick') it.checked = true; });
+
+    renderNav();
+    renderOverview();
+    renderSectionViews();
+    updateRightPanel();
+    bind();
+  }
+
+  function renderNav() {
+    var counts = { quick: 0, medium: 0, deep: 0, habits: 0 };
+    items.forEach(function(it) { if (counts[it.section] !== undefined) counts[it.section]++; });
+    for (var k in counts) {
+      var el = document.getElementById('badge-' + k);
+      if (el) el.textContent = counts[k] || '';
+    }
+    var ts = data.generated_at || new Date().toISOString();
+    document.getElementById('nav-date').textContent = ts.slice(0,10);
+  }
+
+  function renderOverview() {
+    var tot = data.snapshot.totals;
+    var total = tot.estimated_total, ctrl = tot.controllable_tokens;
+    var pct = ((total / 200000) * 100).toFixed(1);
+
+    // Hero card
+    var remaining = 200000 - total;
+    document.getElementById('hero-tag').textContent = fn(total) + ' tokens';
+    document.getElementById('hero-total').textContent = fn(total);
+    document.getElementById('hero-sub').innerHTML =
+      'tokens loaded before you type a word. You start every session with only <span>' + fn(remaining) + '</span> left for actual conversation.';
+
+    // Before You Start card
+    document.getElementById('stat-pct').innerHTML = pct + '% <span class="mini-label">gone before you type</span>';
+    // Generate bar chart from components
+    var c = data.snapshot.components;
+    var vals = [];
+    var ct = 0; for (var k in c) { if (k.indexOf('claude_md') === 0 && c[k].tokens) ct += c[k].tokens; }
+    vals.push(ct);
+    vals.push(c.memory_md ? c.memory_md.tokens : 0);
+    vals.push(c.skills ? c.skills.tokens : 0);
+    vals.push(c.commands ? c.commands.tokens : 0);
+    vals.push(c.mcp_tools ? c.mcp_tools.tokens : 0);
+    vals.push(c.core_system ? c.core_system.tokens : 0);
+    var maxV = Math.max.apply(null, vals) || 1;
+    var barLabels = ['CLAUDE.md', 'MEMORY.md', 'Skills', 'Commands', 'MCP Tools', 'Core System'];
+    var barsHtml = vals.map(function(v, i) {
+      var w = Math.max(3, (v / maxV) * 100);
+      var fixedClass = i === vals.length - 1 ? ' fixed' : '';
+      return '<div class="bar-row">' +
+        '<span class="bar-label">' + barLabels[i] + '</span>' +
+        '<div class="bar-track"><div class="bar-fill' + fixedClass + '" style="width:' + w + '%"></div></div>' +
+        '<span class="bar-value">' + fn(v) + '</span>' +
+        '</div>';
+    }).join('');
+    document.getElementById('chart-bars').innerHTML = barsHtml;
+    document.getElementById('sat-desc').textContent =
+      'Core System is fixed by Claude Code. Everything else is yours to trim. The bigger the bar, the more tokens you can save.';
+
+    // What You'd Save card
+    var planTokens = items.reduce(function(s, it) { return s + it.tokens; }, 0);
+    document.getElementById('stat-potential').innerHTML = '~' + fn(planTokens) + ' <span class="mini-label">tokens recoverable</span>';
+    document.getElementById('potential-desc').textContent =
+      fn(ctrl) + ' of your ' + fn(total) + ' tokens are things you can change. This plan targets ~' + fn(planTokens) + ' in savings. That means longer conversations and fewer compaction interruptions.';
+
+    // Component cards (expandable)
+    var componentData = getComponentDetails(data);
+    var cardsHtml = '';
+    componentData.forEach(function(comp, ci) {
+      cardsHtml += '<div class="component-card" data-comp="' + ci + '">' +
+        '<div class="component-card-header">' +
+        '<span class="cc-name">' + esc(comp.name) + '</span>' +
+        '<span class="cc-right">' +
+        '<span class="cc-tokens">' + fn(comp.tokens) + ' tokens</span>' +
+        '<span class="chevron">&#9662;</span></span></div>' +
+        '<div class="component-card-sub">' + esc(comp.sub) + '</div>' +
+        '<div class="component-card-detail" id="comp-detail-' + ci + '">' +
+        '<div class="component-card-detail-inner">';
+
+      if (comp.what) {
+        cardsHtml += '<div class="detail-heading">What This Includes</div>' +
+          '<div class="detail-text">' + esc(comp.what) + '</div>';
+      }
+      if (comp.top && comp.top.length) {
+        cardsHtml += '<div class="detail-heading">Top Consumers</div>';
+        comp.top.forEach(function(t) {
+          cardsHtml += '<div class="top-consumer"><span class="tc-name">' + esc(t.name) + '</span><span>' + esc(t.note) + '</span></div>';
+        });
+      }
+      if (comp.issues && comp.issues.length) {
+        cardsHtml += '<div class="detail-heading">Issues</div>';
+        comp.issues.forEach(function(iss) {
+          cardsHtml += '<div class="issue-item">' + esc(iss) + '</div>';
+        });
+      }
+      if (comp.related && comp.related.length) {
+        cardsHtml += '<div class="detail-heading">Related Optimizations</div>';
+        comp.related.forEach(function(rel) {
+          cardsHtml += '<a class="related-link" data-nav-section="' + rel.section + '">&rarr; ' + esc(rel.title) + '</a>';
+        });
+      }
+
+      cardsHtml += '</div></div></div>';
+    });
+    var gridEl = document.getElementById('breakdown-grid');
+    gridEl.className = 'component-cards';
+    gridEl.innerHTML = cardsHtml;
+  }
+
+  function renderSectionViews() {
+    var sections = ['quick', 'medium', 'deep', 'habits'];
+    sections.forEach(function(sec) {
+      var el = document.getElementById('view-' + sec);
+      if (!el) return;
+      var secItems = items.filter(function(it) { return it.section === sec; });
+      var isHabits = (sec === 'habits');
+
+      var html = '<div class="section-header">' +
+        '<div class="label">' + (isHabits ? 'Recommendations' : 'Optimization Plan') + '</div>' +
+        '<h1>' + (groupLabels[sec] || sec) + '</h1>' +
+        '<p>' + (groupDescs[sec] || '') + '</p>' +
+        '</div>';
+
+      if (secItems.length === 0) {
+        html += '<div class="empty-state">No items in this category.</div>';
+        el.innerHTML = html;
+        return;
+      }
+
+      if (isHabits) {
+        // Habits: render as recommendation cards (no toggles, always expanded)
+        secItems.forEach(function(it) {
+          html += '<div class="rec-item">' +
+            '<div class="rec-title"><span class="rec-icon">&#x2B21;</span> ' + esc(it.title) + '</div>' +
+            '<div class="rec-body">' + esc(it.shortDesc) + '</div>';
+          if (it.detail) {
+            html += '<div class="rec-impact-label">Daily Impact</div>' +
+              '<div class="rec-impact">' + esc(it.detail) + '</div>';
+          }
+          html += '</div>';
+        });
+        el.innerHTML = html;
+        return;
+      }
+
+      // Non-habits: Select All row + expandable setting rows with toggles
+      html += '<div class="select-all-row">' +
+        '<span>Select All</span>' +
+        '<label class="toggle" data-selectall="' + sec + '">' +
+        '<input type="checkbox"><span class="slider"></span></label></div>';
+
+      secItems.forEach(function(it) {
+        html += '<div class="setting-row" data-idx="' + it._i + '">' +
+          '<div class="setting-info">' +
+          '<span class="setting-title">' + esc(it.title) + '</span>' +
+          '<span class="setting-desc">' + esc(it.shortDesc) + '</span>' +
+          '</div>' +
+          '<div class="setting-right">' +
+          (it.tokens ? '<span class="status-badge">~' + fn(it.tokens) + ' tok</span>' : '') +
+          '<label class="toggle" data-toggle="' + it._i + '">' +
+          '<input type="checkbox"' + (it.checked ? ' checked' : '') + '>' +
+          '<span class="slider"></span></label>' +
+          '<span class="chevron">&#9662;</span>' +
+          '</div></div>';
+
+        // Expandable detail panel
+        html += '<div class="setting-detail" data-detail-for="' + it._i + '">' +
+          '<div class="setting-detail-inner">';
+        if (it.detail) {
+          // Split detail into sections based on known patterns
+          var detailParts = splitDetailSections(it.detail);
+          detailParts.forEach(function(part) {
+            html += '<div class="detail-heading">' + esc(part.heading) + '</div>' +
+              '<div class="detail-text">' + esc(part.text) + '</div>';
+          });
+        } else {
+          html += '<div class="detail-text">' + esc(it.fullDesc) + '</div>';
+        }
+        html += '</div></div>';
+      });
+
+      el.innerHTML = html;
+      syncSelectAll(sec);
+    });
+  }
+
+  function splitDetailSections(detail) {
+    // Try to split on sentence boundaries into WHY / TRADE-OFFS / WHAT CHANGES
+    var sentences = detail.split(/(?<=\.)\s+/);
+    if (sentences.length >= 3) {
+      var mid = Math.ceil(sentences.length / 3);
+      var end = Math.ceil(2 * sentences.length / 3);
+      return [
+        { heading: 'Why This Matters', text: sentences.slice(0, mid).join(' ') },
+        { heading: 'Trade-offs', text: sentences.slice(mid, end).join(' ') },
+        { heading: 'What Changes', text: sentences.slice(end).join(' ') }
+      ];
+    }
+    if (sentences.length === 2) {
+      return [
+        { heading: 'Why This Matters', text: sentences[0] },
+        { heading: 'What Changes', text: sentences[1] }
+      ];
+    }
+    return [{ heading: 'Details', text: detail }];
+  }
+
+  function updateRightPanel() {
+    var sel = items.filter(function(it) { return it.checked && it.section !== 'habits'; });
+    var count = sel.length;
+    var tok = sel.reduce(function(s, it) { return s + it.tokens; }, 0);
+
+    document.getElementById('r-count').textContent = count;
+    document.getElementById('r-tokens').textContent = fn(tok);
+    document.getElementById('copy-btn').disabled = count === 0;
+
+    var listEl = document.getElementById('selected-list');
+    var emptyEl = document.getElementById('empty-selected');
+
+    if (count === 0) {
+      listEl.innerHTML = '<div class="empty-state">Toggle items to build your optimization prompt.</div>';
+      return;
+    }
+
+    var html = '';
+    sel.forEach(function(it) {
+      html += '<div class="selected-item">' + esc(it.title.slice(0, 50)) + '</div>';
+    });
+    listEl.innerHTML = html;
+  }
+
+  function syncSelectAll(section) {
+    var secItems = items.filter(function(it) { return it.section === section; });
+    var allChecked = secItems.length > 0 && secItems.every(function(it) { return it.checked; });
+    var toggle = document.querySelector('[data-selectall="' + section + '"] input');
+    if (toggle) toggle.checked = allChecked;
+  }
+
+  function buildPrompt() {
+    var sel = items.filter(function(it) { return it.checked && it.section !== 'habits'; });
+    if (!sel.length) return '';
+    var out = ["I've reviewed my Token Optimizer audit. Please implement these optimizations:", ''];
+    sel.forEach(function(it, i) {
+      var tag = it.group === 'Quick Wins' ? 'Quick Win' : it.group === 'Medium Effort' ? 'Medium' : it.group === 'Deep' ? 'Deep' : 'Behavioral';
+      var line = (i+1) + '. [' + tag + '] ' + it.title;
+      if (it.tokens) line += ' (~' + fn(it.tokens) + ' tokens)';
+      out.push(line);
+    });
+    var notes = document.getElementById('notes-input').value.trim();
+    if (notes) { out.push(''); out.push('Notes from my review:'); out.push(notes); }
+    var tot = sel.reduce(function(s, it) { return s + it.tokens; }, 0);
+    if (tot) { out.push(''); out.push('Estimated savings: ~' + fn(tot) + ' tokens/session'); }
+    out.push(''); out.push('Show diffs before changes. Back up to ~/.claude/_backups/ first.');
+    return out.join('\n');
+  }
+
+  function doCopy() {
+    var text = buildPrompt();
+    if (!text) return;
+    var btn = document.getElementById('copy-btn');
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function(){ flash(btn); }).catch(function(){ fallback(text, btn); });
+    } else { fallback(text, btn); }
+  }
+
+  function fallback(text, btn) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); flash(btn); }
+    catch(e) { btn.textContent = 'SEE CONSOLE'; console.log(text); setTimeout(function(){ btn.textContent = 'COPY PROMPT'; }, 3000); }
+    document.body.removeChild(ta);
+  }
+
+  function flash(btn) {
+    btn.classList.add('copied'); btn.textContent = 'COPIED!';
+    setTimeout(function(){ btn.classList.remove('copied'); btn.textContent = 'COPY PROMPT'; }, 2000);
+  }
+
+  function bind() {
+    // Nav clicks
+    document.querySelectorAll('.nav-item[data-view]').forEach(function(lnk) {
+      lnk.addEventListener('click', function(e) {
+        e.preventDefault();
+        var v = this.getAttribute('data-view');
+        document.querySelectorAll('.view').forEach(function(el) { el.classList.remove('active'); });
+        document.querySelectorAll('.nav-item').forEach(function(n) { n.classList.remove('active'); });
+        document.getElementById('view-' + v).classList.add('active');
+        this.classList.add('active');
+        document.querySelector('.main-col').scrollTop = 0;
+      });
+    });
+
+    // Individual toggles (delegated)
+    document.addEventListener('change', function(e) {
+      var toggleLabel = e.target.closest('[data-toggle]');
+      if (toggleLabel) {
+        var idx = parseInt(toggleLabel.getAttribute('data-toggle'), 10);
+        items[idx].checked = e.target.checked;
+        syncSelectAll(items[idx].section);
+        updateRightPanel();
+        return;
+      }
+
+      var selectAll = e.target.closest('[data-selectall]');
+      if (selectAll) {
+        var sec = selectAll.getAttribute('data-selectall');
+        var checked = e.target.checked;
+        items.forEach(function(it) {
+          if (it.section === sec) {
+            it.checked = checked;
+            var tgl = document.querySelector('[data-toggle="' + it._i + '"] input');
+            if (tgl) tgl.checked = checked;
+          }
+        });
+        updateRightPanel();
+      }
+    });
+
+    // Setting row expand/collapse (delegated)
+    document.addEventListener('click', function(e) {
+      // Stop propagation on toggle clicks so expand doesn't fire
+      if (e.target.closest('.toggle')) return;
+
+      // Setting row expand/collapse
+      var row = e.target.closest('.setting-row[data-idx]');
+      if (row) {
+        var idx = row.getAttribute('data-idx');
+        var detail = document.querySelector('[data-detail-for="' + idx + '"]');
+        if (detail) {
+          var isOpen = row.classList.contains('expanded');
+          row.classList.toggle('expanded');
+          if (isOpen) {
+            detail.style.maxHeight = '0';
+          } else {
+            detail.style.maxHeight = detail.scrollHeight + 'px';
+          }
+        }
+        return;
+      }
+
+      // Component card expand/collapse
+      var card = e.target.closest('.component-card');
+      if (card && !e.target.closest('.related-link')) {
+        var ci = card.getAttribute('data-comp');
+        var cardDetail = document.getElementById('comp-detail-' + ci);
+        if (cardDetail) {
+          var isCardOpen = card.classList.contains('expanded');
+          card.classList.toggle('expanded');
+          if (isCardOpen) {
+            cardDetail.style.maxHeight = '0';
+          } else {
+            cardDetail.style.maxHeight = cardDetail.scrollHeight + 'px';
+          }
+        }
+        return;
+      }
+
+      // Related optimization link navigation
+      var relLink = e.target.closest('.related-link[data-nav-section]');
+      if (relLink) {
+        e.preventDefault();
+        var section = relLink.getAttribute('data-nav-section');
+        var navItem = document.querySelector('.nav-item[data-view="' + section + '"]');
+        if (navItem) navItem.click();
+        return;
+      }
+    });
+
+    // Copy button
+    document.getElementById('copy-btn').addEventListener('click', doCopy);
+  }
+
+  function fn(n) { return n >= 1000 ? (n/1000).toFixed(1).replace(/\.0$/,'') + 'K' : String(n); }
+
+  return { init: init };
+})();
+
+/* ========== SAMPLE DATA (28 items: 7+8+7+6) ========== */
+function getSampleData() {
+  return {
+    snapshot: {
+      components: {
+        claude_md_global: { tokens: 1210, lines: 106, exists: true },
+        claude_md_home: { tokens: 15, lines: 1, exists: true },
+        memory_md: { tokens: 2775, lines: 185, exists: true },
+        skills: { count: 56, tokens: 3500, names: [] },
+        commands: { count: 59, tokens: 2950, names: [] },
+        mcp_tools: { server_count: 13, tool_count_estimate: 104, tokens: 1560 },
+        rules: { count: 2, tokens: 200 },
+        imports: { count: 0, tokens: 0 },
+        claude_local_md: { tokens: 0, exists: false },
+        core_system: { tokens: 15000 },
+        claudeignore: { exists: true },
+        hooks: { configured: true, names: ['SessionStart','PreCompact'] },
+        settings_env: { found: {} },
+        settings_local: { exists: true },
+        skill_frontmatter_quality: { verbose_count: 12 }
+      },
+      component_details: {
+        claude_md: {
+          what: 'Your CLAUDE.md files are loaded at the start of every session. They contain personality rules, key paths, workflow instructions, and quality gates that shape every Claude response.',
+          top: [
+            { name: 'Global CLAUDE.md', note: '~1,210 tokens' },
+            { name: 'Home CLAUDE.md', note: '~15 tokens' }
+          ],
+          issues: [
+            'Multi-Agent Coordination section is verbose',
+            'qmd section duplicates CLAUDE.md content'
+          ],
+          related: [
+            { title: 'Condense Multi-Agent Coordination', section: 'quick' },
+            { title: 'Remove duplicate qmd section', section: 'quick' },
+            { title: 'Split CLAUDE.md into modular imports', section: 'deep' }
+          ]
+        },
+        memory_md: {
+          what: 'Auto-memory file loaded into every conversation context. Contains accumulated patterns, decisions, and system notes. Lines after 200 are truncated but still counted.',
+          top: [
+            { name: 'Competitive Landscape', note: '~150 tokens, stale' },
+            { name: 'Vercel Deployment', note: '~140 tokens' },
+            { name: 'WhatsApp Bridge', note: '~130 tokens' },
+            { name: 'Total Recall v4', note: '~120 tokens' },
+            { name: 'Skill Packaging', note: '~100 tokens' }
+          ],
+          issues: [
+            'Competitive landscape section has stale data',
+            '5 sections could be condensed by 50%+',
+            'Some notes are one-time fixes already applied'
+          ],
+          related: [
+            { title: 'Delete competitive landscape', section: 'quick' },
+            { title: 'Condense 5 verbose sections', section: 'medium' },
+            { title: 'Restructure as index', section: 'deep' }
+          ]
+        },
+        skills: {
+          sub: '56 user skills + 99 plugin skills',
+          what: "Every skill's SKILL.md frontmatter (name + description) is loaded into the tool menu at session start. The description length directly controls token cost.",
+          top: [
+            { name: 'icp-persona-builder', note: '39,962 bytes' },
+            { name: 'api-documentation', note: '30,175 bytes' },
+            { name: 'morning', note: '27,809 bytes' },
+            { name: 'evening', note: '22,025 bytes' },
+            { name: 'writing-skills', note: '20,819 bytes' }
+          ],
+          issues: [
+            '48 of 56 have descriptions over 200 chars',
+            '2 broken symlinks (wiggle, UX-Design-Master)',
+            '1 plugin duplicate (frontend-design)',
+            'compound-engineering: 12+ Ruby/Rails skills unused'
+          ],
+          related: [
+            { title: 'Trim top-10 skill descriptions', section: 'medium' },
+            { title: 'Remove broken symlinks', section: 'quick' },
+            { title: 'Remove irrelevant CE skills', section: 'deep' }
+          ]
+        },
+        commands: {
+          what: "Each command's COMMAND.md file is parsed and registered at startup. Commands with long descriptions consume tokens even if rarely used. Command suites share a namespace.",
+          top: [
+            { name: 'gsd:* suite', note: '25 commands, ~1,200 tokens' },
+            { name: 'compound-engineering:*', note: '15 commands, ~800 tokens' },
+            { name: 'User commands', note: '19 commands, ~950 tokens' }
+          ],
+          issues: [
+            'gsd + CE commands may be unused overhead',
+            '3 pairs of overlapping commands identified',
+            'sync-email and sync-calendars could merge'
+          ],
+          related: [
+            { title: 'Assess gsd bundle usage', section: 'medium' },
+            { title: 'Merge overlapping commands', section: 'deep' },
+            { title: 'Consolidate sync commands', section: 'medium' }
+          ]
+        },
+        mcp_tools: {
+          what: "MCP server tool definitions are loaded when servers connect. Each tool's name, description, and parameter schema contribute to token cost. Duplicate servers double the cost.",
+          top: [
+            { name: 'context7 (x2)', note: '~300 tokens (duplicated)' },
+            { name: 'BrightData (x2)', note: '~200 tokens (duplicated)' },
+            { name: 'memory + memory-semantic', note: '~400 tokens' },
+            { name: 'whatsapp', note: '~150 tokens' }
+          ],
+          issues: [
+            'context7 registered twice (plugin + standalone)',
+            'BrightData registered twice',
+            '13 servers total, some rarely used'
+          ],
+          related: [
+            { title: 'Merge duplicate MCP servers', section: 'medium' }
+          ]
+        },
+        core_system: {
+          what: "Claude Code's built-in system prompt, tool definitions, safety instructions, and MCP protocol overhead. This is fixed by Anthropic and cannot be reduced.",
+          top: [],
+          issues: [],
+          related: []
+        }
+      },
+      totals: { controllable_tokens: 12210, fixed_tokens: 15000, estimated_total: 27210 },
+      session_baselines: []
+    },
+    audit: {},
+    plan: '## Quick Wins\n\n' +
+      '- [ ] **Delete competitive landscape from MEMORY.md**: Star counts, SaaS pricing tiers, Browse App concept, monetization plan.\n' +
+      '  Pure strategy notes with stale numbers. Zero effect on Claude behavior. Loaded every single session for no reason.\n' +
+      '  The data lives in semantic memory and in /tmp/total-recall-competitive/. Recoverable anytime.\n' +
+      '  Delete the "Total Recall Competitive Landscape" section from MEMORY.md. ~150 tokens freed per session.\n\n' +
+      '- [ ] **Remove broken symlinks**: wiggle and UX-Design-Master skill directories are broken symlinks pointing to deleted targets.\n' +
+      '  Claude Code tries to parse these at session start, generates warnings, and wastes time.\n' +
+      '  No trade-offs, these skills no longer exist. Just delete the dangling symlinks. ~100 tokens.\n\n' +
+      '- [ ] **Condense Multi-Agent Coordination**: The current section is 8 lines with detailed folder structure rules.\n' +
+      '  Reduce to a 2-line pointer: "Create coordination folder for 2+ agents. See SYSTEM/references/ for structure."\n' +
+      '  Full spec moves to a reference file. ~50 tokens/session.\n\n' +
+      '- [ ] **Remove duplicate qmd section**: The qmd integration pattern note in MEMORY.md just says "see CLAUDE.md".\n' +
+      '  It adds nothing. The authoritative qmd spec is already in CLAUDE.md. Remove the pointer entirely. ~40 tokens.\n\n' +
+      '- [ ] **Delete stale automation timeouts**: The 900s timeout fix was applied months ago.\n' +
+      '  This note was useful during debugging but is now pure historical context. Safe to remove. ~35 tokens.\n\n' +
+      '- [ ] **Trim email freshness note**: Currently 4 sentences explaining input_email.md size.\n' +
+      '  Reduce to: "Use priority_inbox.md for email freshness. Use tail -2000 on input_email.md for recent." ~25 tokens.\n\n' +
+      '- [ ] **Remove PEP 668 note from /img**: The --break-system-packages flag was a one-time Python 3.14 fix.\n' +
+      '  Already applied. No reason to remind Claude about it every session. ~20 tokens.\n\n' +
+      '## Medium Effort\n\n' +
+      '- [ ] **Condense 5 verbose MEMORY.md sections**: WhatsApp Bridge, Self-Improving Hooks, Context-Memory Sync, Total Recall, and Vercel Deployment.\n' +
+      '  Each section carries implementation details that only matter during active development.\n' +
+      '  Condense each to 2-3 essential lines. Move details to topic-specific memory files.\n' +
+      '  Total savings: ~825 tokens/session.\n\n' +
+      '- [ ] **Trim top-10 skill descriptions**: 48 of 56 user skills have descriptions exceeding 200 characters.\n' +
+      '  The top 10 by byte size account for most of the waste. Shorter descriptions reduce tool menu token cost.\n' +
+      '  Review each skill and trim to under 120 characters. ~1,050 tokens/session.\n\n' +
+      '- [ ] **Assess gsd bundle usage**: The GSD plugin contributes 30 skills and 25 commands totaling ~2,750 tokens.\n' +
+      '  If unused in daily workflow, disabling the plugin saves significant overhead.\n' +
+      '  Run usage analysis first. If active, keep. If dormant, disable entirely.\n\n' +
+      '- [ ] **Merge duplicate MCP servers**: context7 is registered twice (plugin + standalone). BrightData is also duplicated.\n' +
+      '  Each duplicate loads the same tool definitions twice, doubling token cost for zero benefit.\n' +
+      '  Remove the standalone instances, keep plugin versions. ~375 tokens.\n\n' +
+      '- [ ] **Shorten skill frontmatter**: 12 skills have verbose multi-sentence descriptions in SKILL.md frontmatter.\n' +
+      '  The frontmatter description is loaded into the tool menu for every session.\n' +
+      '  Trim to single-sentence descriptions under 80 characters each. ~480 tokens.\n\n' +
+      '- [ ] **Consolidate sync commands**: sync-email and sync-calendars are separate commands that could be one.\n' +
+      '  They share similar structure and are often run together. Merge into a single sync command with subcommands. ~150 tokens.\n\n' +
+      '- [ ] **Archive old Vercel projects**: 3 inactive v0 projects (58+ days dormant) still contribute to config overhead.\n' +
+      '  Archive or delete from Vercel dashboard. Clean up deploy references in MEMORY.md. ~200 tokens.\n\n' +
+      '- [ ] **Compress hook system docs**: The hook system reference in MEMORY.md has full implementation details.\n' +
+      '  Reduce to hook names and one-line purposes. Full docs stay in SYSTEM/references/hooks-system.md. ~120 tokens.\n\n' +
+      '## Deep Optimization\n\n' +
+      '- [ ] **Remove irrelevant compound-engineering skills**: 12-15 Ruby, Rails, and iOS review skills from the CE plugin.\n' +
+      '  These are for Ruby/Rails codebases. Your stack is Python, TypeScript, and shell scripts.\n' +
+      '  Each loads its SKILL.md frontmatter into the tool menu. Remove via plugin configuration. ~600 tokens/session.\n\n' +
+      '- [ ] **Merge overlapping commands**: 3 pairs of commands with similar functionality identified.\n' +
+      '  Redundant commands increase the tool menu size and create confusion about which to use.\n' +
+      '  Merge each pair into the more descriptive variant. ~225 tokens.\n\n' +
+      '- [ ] **Restructure MEMORY.md as index**: Current MEMORY.md is 185 lines of inline content, all loaded every session.\n' +
+      '  Convert to an index of 1-line pointers to topic files (debugging.md, patterns.md, etc.).\n' +
+      '  Topic files are only loaded on demand. Largest structural savings opportunity. ~1,200 tokens.\n\n' +
+      '- [ ] **Create .claudeignore for large files**: settings.local.json is 85KB and gets indexed by Claude Code.\n' +
+      '  Add it to .claudeignore along with other large non-code files.\n' +
+      '  Reduces file indexing overhead without affecting functionality. ~300 tokens.\n\n' +
+      '- [ ] **Split CLAUDE.md into modular imports**: Separate personality, paths, rules, and gotchas into importable modules.\n' +
+      '  Only the core module loads every session. Others load on demand via imports.\n' +
+      '  Requires careful testing of import resolution. ~400 tokens.\n\n' +
+      '- [ ] **Implement tiered skill loading**: Load only skill names at startup, full descriptions on demand.\n' +
+      '  Requires changes to how skills are registered in the tool menu.\n' +
+      '  Significant engineering effort but the highest per-skill savings possible. ~800 tokens.\n\n' +
+      '- [ ] **Custom compact strategy**: Configure compaction to prioritize preserving recent conversation context.\n' +
+      '  Default compaction treats all context equally. Recent messages are more valuable.\n' +
+      '  Requires custom PreCompact hook implementation. ~500 tokens.\n\n' +
+      '## Behavioral Changes\n\n' +
+      '- [ ] **Run /compact at 70% context**: At 90%+, Claude is already operating with degraded context.\n' +
+      '  Earlier compaction preserves quality and prevents the expensive "recovery from degraded context" pattern.\n' +
+      '  ~1,000 cleaner tokens per long session. Prevents 5-15% quality degradation.\n\n' +
+      '- [ ] **Use /clear between unrelated topics**: Carrying stale context from a previous task wastes tokens and can confuse responses.\n' +
+      '  A fresh context for each distinct topic is cheaper and produces better results.\n' +
+      '  Free savings, just requires building the habit.\n\n' +
+      '- [ ] **Default subagents to Haiku/Sonnet**: Opus is 10x the cost of Haiku for data-gathering tasks.\n' +
+      '  Reserve Opus for complex reasoning. Use Haiku for search, file reads, and data extraction.\n' +
+      '  40-60% cost reduction on multi-agent workflows.\n\n' +
+      '- [ ] **Batch similar file edits**: Multiple small edits to the same file create redundant context loading.\n' +
+      '  Group related changes into a single edit pass. Reduces round-trips and token overhead.\n' +
+      '  Most impactful during refactoring sessions.\n\n' +
+      '- [ ] **Review before /remember**: Speculative saves bloat semantic memory with unverified information.\n' +
+      '  Verify insights against project docs before committing to memory.\n' +
+      '  Prevents memory pollution and keeps search results relevant.\n\n' +
+      '- [ ] **Use qmd before Glob**: qmd hybrid search is indexed and faster than recursive Glob for file discovery.\n' +
+      '  Less tool output in context means more room for actual work.\n' +
+      '  Already configured, just needs consistent usage.\n',
+    generated_at: new Date().toISOString()
+  };
+}
+
+/* ========== INIT ========== */
+document.addEventListener('DOMContentLoaded', function() {
+  DB.init(window.__TOKEN_DATA__ || getSampleData());
+});
+</script>
+</body>
+</html>

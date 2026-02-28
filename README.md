@@ -124,6 +124,14 @@ Results depend on your setup. Heavier setups save more.
 | Batch requests into one message | Each message re-sends your full config stack |
 | [Plan mode](https://code.claude.com/docs/en/best-practices) for complex tasks | 50-70% fewer iteration cycles |
 
+## Interactive Dashboard
+
+After the audit, you get an interactive HTML dashboard that breaks down exactly where your tokens go and what you can do about it.
+
+![Token Optimizer Dashboard](skills/token-optimizer/assets/dashboard-overview.png)
+
+Every component is clickable. Expand any item to see why it matters, what the trade-offs are, and what changes. Toggle the fixes you want, and copy a ready-to-paste optimization prompt.
+
 ## How It Works
 
 ![5-phase optimization flow](skills/token-optimizer/assets/how-it-works.svg)
@@ -176,6 +184,7 @@ python3 ~/.claude/skills/token-optimizer/scripts/measure.py compare
 skills/token-optimizer/
   SKILL.md                             Orchestrator
   assets/
+    dashboard.html                     Interactive optimization dashboard
     logo.svg                           Animated ASCII logo
     hero-terminal.svg                  Terminal demo
     before-after.svg                   Token breakdown comparison

@@ -130,6 +130,18 @@ Ready to implement? I can:
 What should we tackle first?
 ```
 
+**Then generate the interactive dashboard:**
+
+```bash
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py dashboard --coord-path $COORD_PATH
+```
+
+This opens an HTML dashboard in the browser with all findings, a token donut chart, and an optimization checklist. The user can browse categories, toggle optimizations, and click "Copy Prompt" to paste selected items back into Claude Code.
+
+Tell the user: "Dashboard opened in your browser. Browse findings by category, check the optimizations you want, click Copy Prompt and paste back here. Or just tell me directly what to tackle."
+
+The terminal summary above remains for headless/terminal-only environments. Dashboard is additive.
+
 **Wait for user decision before proceeding.**
 
 ---

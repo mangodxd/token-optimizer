@@ -9,6 +9,7 @@ Usage:
     python3 measure.py snapshot after     # Save post-optimization snapshot
     python3 measure.py compare            # Compare before vs after
     python3 measure.py report             # Full standalone report
+    python3 measure.py dashboard --coord-path /tmp/...  # Generate interactive dashboard
 
 Snapshots are saved to SNAPSHOT_DIR (default: ~/.claude/_backups/token-optimizer/)
 
@@ -20,6 +21,7 @@ import json
 import os
 import glob
 import re
+import subprocess
 import sys
 import platform
 from datetime import datetime
@@ -923,6 +925,116 @@ def full_report():
     print(f"\n{'=' * 55}")
 
 
+def _open_in_browser(filepath):
+    """Open a file in the default browser. Cross-platform."""
+    filepath = str(filepath)
+    system = platform.system()
+    try:
+        if system == "Darwin":
+            subprocess.run(["open", filepath], check=True)
+        elif system == "Linux":
+            subprocess.run(["xdg-open", filepath], check=True)
+        elif system == "Windows":
+            os.startfile(filepath)
+        else:
+            raise OSError(f"Unsupported platform: {system}")
+    except (subprocess.CalledProcessError, OSError, FileNotFoundError):
+        url = Path(filepath).as_uri()
+        print(f"\n  Could not auto-open browser. Open manually:")
+        print(f"  {url}")
+
+
+def generate_dashboard(coord_path):
+    """Generate an interactive HTML dashboard from audit results."""
+    coord = Path(coord_path)
+    if not coord.exists():
+        print(f"Error: coord-path does not exist: {coord_path}")
+        print("Usage: python3 measure.py dashboard --coord-path /tmp/token-optimizer-XXXXXXXXXX")
+        sys.exit(1)
+
+    # Locate the template
+    script_dir = Path(__file__).resolve().parent
+    template_path = script_dir.parent / "assets" / "dashboard.html"
+    if not template_path.exists():
+        print(f"Error: dashboard template not found at: {template_path}")
+        sys.exit(1)
+
+    # Re-measure current state
+    print("  Measuring current token overhead...")
+    components = measure_components()
+    totals = calculate_totals(components)
+    baselines = get_session_baselines(5)
+
+    snapshot = {
+        "components": components,
+        "totals": totals,
+        "session_baselines": baselines,
+    }
+
+    # Read audit files
+    audit_dir = coord / "audit"
+    audit = {}
+    audit_files = {
+        "claudemd": "claudemd.md",
+        "memorymd": "memorymd.md",
+        "skills": "skills.md",
+        "mcp": "mcp.md",
+        "commands": "commands.md",
+        "advanced": "advanced.md",
+    }
+    for key, filename in audit_files.items():
+        fpath = audit_dir / filename
+        if fpath.exists():
+            try:
+                audit[key] = fpath.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                audit[key] = None
+        else:
+            audit[key] = None
+
+    found = sum(1 for v in audit.values() if v)
+    print(f"  Loaded {found}/{len(audit_files)} audit files")
+
+    # Read optimization plan
+    plan_path = coord / "analysis" / "optimization-plan.md"
+    plan = None
+    if plan_path.exists():
+        try:
+            plan = plan_path.read_text(encoding="utf-8")
+            print(f"  Loaded optimization plan ({len(plan)} chars)")
+        except (OSError, UnicodeDecodeError):
+            pass
+
+    # Assemble data
+    data = {
+        "snapshot": snapshot,
+        "audit": audit,
+        "plan": plan,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+    # Load template and inject data
+    template = template_path.read_text(encoding="utf-8")
+    data_json = json.dumps(data, ensure_ascii=False, default=str)
+    injected = template.replace(
+        "window.__TOKEN_DATA__ = null;",
+        f"window.__TOKEN_DATA__ = {data_json};",
+        1,
+    )
+
+    # Write output
+    out_dir = coord / "analysis"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "dashboard.html"
+    out_path.write_text(injected, encoding="utf-8")
+    print(f"  Dashboard written to: {out_path}")
+
+    # Open in browser
+    _open_in_browser(out_path)
+    print(f"  Opened in browser.")
+    return str(out_path)
+
+
 if __name__ == "__main__":
     args = sys.argv[1:]
 
@@ -932,9 +1044,20 @@ if __name__ == "__main__":
         take_snapshot(args[1])
     elif args[0] == "compare":
         compare_snapshots()
+    elif args[0] == "dashboard":
+        cp = None
+        for i, a in enumerate(args):
+            if a == "--coord-path" and i + 1 < len(args):
+                cp = args[i + 1]
+                break
+        if not cp:
+            print("Usage: python3 measure.py dashboard --coord-path /tmp/token-optimizer-XXXXXXXXXX")
+            sys.exit(1)
+        generate_dashboard(cp)
     else:
         print("Usage:")
         print("  python3 measure.py report              # Full report")
         print("  python3 measure.py snapshot before      # Save pre-optimization snapshot")
         print("  python3 measure.py snapshot after       # Save post-optimization snapshot")
         print("  python3 measure.py compare              # Compare before vs after")
+        print("  python3 measure.py dashboard --coord-path PATH  # Interactive dashboard")
