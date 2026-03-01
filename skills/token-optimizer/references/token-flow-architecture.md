@@ -250,7 +250,7 @@ Message 3: 35,000 previous + new message + response = ~50,000 total
     |
 ...context grows...
     |
-AUTO-COMPACT triggers at 95% fill (~190K of 200K window) — too late for most users
+AUTO-COMPACT triggers near context limits — often too late for best quality
     |
 Context compressed (lossy)
     |
@@ -266,7 +266,7 @@ Continue until /clear or session end
 | 70-85% | Noticeable cutting corners |
 | 85%+ | Hallucinations, drift, forgetfulness |
 
-**Recommendation**: Manually /compact at 50-70% to stay in peak zone. Auto-compact default is 95%, which is too late. Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70` to auto-compact at 70%.
+**Recommendation**: Manually /compact at 50-70% to stay in peak zone. Auto-compact triggers near context limits, past the quality degradation threshold. Set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=70` to auto-compact earlier.
 
 ---
 

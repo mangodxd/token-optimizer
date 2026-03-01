@@ -43,13 +43,13 @@ Your 200K context window gets eaten from multiple directions:
 
 **Fixed overhead** (everyone pays, can't change): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% of your window, gone before anything else loads.
 
-**Autocompact buffer**: When autocompact is on (the default), Claude Code reserves ~33K tokens for compaction headroom. That's 16.5% of your window holding nothing. Run `/context` on a fresh session to see it.
+**Autocompact buffer**: When autocompact is on (the default), Claude Code reserves headroom for compaction. In practice, roughly 30-35K tokens (~16% of your window) sit empty. Run `/context` on a fresh session to see the exact number.
 
-**MCP tools**: The biggest variable. Anthropic's own engineering team [measured 134K tokens consumed by tool definitions](https://www.anthropic.com/engineering/advanced-tool-use) before optimization. [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) (default since Jan 2026) reduced this by 85%, but MCP servers still add up: each deferred tool costs ~15 tokens, plus server instructions.
+**MCP tools**: The biggest variable. Anthropic's own engineering team [measured 134K tokens consumed by tool definitions](https://www.anthropic.com/engineering/advanced-tool-use) before optimization. [Tool Search](https://www.anthropic.com/engineering/advanced-tool-use) (activates automatically when MCP tools exceed [~10% of context](https://code.claude.com/docs/en/costs)) reduced this by 85%, but MCP servers still add up: each deferred tool costs ~15 tokens, plus server instructions.
 
 **Your config stack** (what this tool optimizes): CLAUDE.md that's grown organically. MEMORY.md that duplicates half of it. 50+ skills you installed and forgot. Commands you never use. [`@imports`](https://code.claude.com/docs/en/memory) pulling in files you didn't realize. [`.claude/rules/`](https://code.claude.com/docs/en/memory) adding up quietly. No `.claudeignore` to block system reminder injection.
 
-A real power user's session baseline: **43,000 tokens consumed** plus the 33K autocompact buffer. That's **38% of the 200K window unavailable** before typing a single word.
+A real power user's session baseline: **~43,000 tokens consumed per message** (22% of the 200K window). Add the autocompact buffer and **~38% is unavailable** before typing a single word.
 
 ## What This Does
 
@@ -109,7 +109,7 @@ Results depend on your setup. Heavier setups save more.
 | Starting Point | Typical Recovery |
 |----------------|-----------------|
 | Power user (50+ skills, 3+ MCP servers, bloated config) | 5-15% of context window |
-| Missing Tool Search (pre-Jan 2026 or disabled) | Up to 57% — [134K down to ~8.7K](https://www.anthropic.com/engineering/advanced-tool-use) |
+| No Tool Search (disabled or not triggered) | [134K → ~8.7K tokens](https://www.anthropic.com/engineering/advanced-tool-use) (85% reduction in MCP overhead) |
 | Lighter setup (few skills, 1 MCP server) | 3-8% |
 
 **Advanced option**: Disabling autocompact and managing `/compact` manually recovers an additional ~16% of your window. The optimizer explains the tradeoff and helps you decide.
@@ -118,11 +118,11 @@ Results depend on your setup. Heavier setups save more.
 
 | Habit | Why It Matters |
 |-------|---------------|
-| `/compact` at 50-70% instead of auto-compact at ~83% | Better output quality, fewer hallucinations |
+| `/compact` at 50-70% instead of waiting for auto-compact | Better output quality, fewer hallucinations |
 | [Haiku for data-gathering agents](https://code.claude.com/docs/en/costs) | 5x cheaper than Opus for file reads and counting |
 | `/clear` between unrelated topics | Fresh context, no stale information dragging quality down |
 | Batch requests into one message | Each message re-sends your full config stack |
-| [Plan mode](https://code.claude.com/docs/en/best-practices) for complex tasks | 50-70% fewer iteration cycles |
+| [Plan mode](https://code.claude.com/docs/en/best-practices) for complex tasks | Prevents expensive re-work from wrong initial direction |
 
 ## Interactive Dashboard
 
@@ -153,7 +153,7 @@ Prompt caching cuts cost by 90%. But it doesn't shrink your context window.
 - **You hit compaction sooner** — compaction is lossy, every cycle throws away context
 - **Rate limits burn faster** — cache reads still count toward your subscription quota
 - **Quality degrades** — performance drops as context fills, especially past 70%
-- **Agents multiply it** — each subagent inherits your full overhead. [Agent teams use ~7x more tokens](https://code.claude.com/docs/en/costs) than standard sessions
+- **Agents multiply it** — each subagent inherits your full overhead. [Agent teams use ~7x more tokens in plan mode](https://code.claude.com/docs/en/costs) than standard sessions
 
 ## Measurement Tool
 
