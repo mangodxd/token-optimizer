@@ -10,6 +10,8 @@ Usage:
     python3 measure.py compare            # Compare before vs after
     python3 measure.py report             # Full standalone report
     python3 measure.py dashboard --coord-path /tmp/...  # Generate interactive dashboard
+    python3 measure.py dashboard --coord-path /tmp/... --serve  # Serve over HTTP (headless)
+    python3 measure.py dashboard --coord-path /tmp/... --serve --port 9000  # Custom port
     python3 measure.py health             # Check running session health
     python3 measure.py trends             # Usage trends (last 30 days)
     python3 measure.py trends --days 7    # Usage trends (shorter window)
@@ -996,6 +998,59 @@ def _open_in_browser(filepath):
         url = Path(filepath).as_uri()
         print(f"\n  Could not auto-open browser. Open manually:")
         print(f"  {url}")
+
+
+def _serve_dashboard(filepath, port=8080):
+    """Serve the dashboard over HTTP for headless/remote access."""
+    import http.server
+    import socketserver
+    import socket
+
+    filepath = Path(filepath).resolve()
+    serve_dir = str(filepath.parent)
+    filename = filepath.name
+
+    # Find an available port if the default is taken
+    for attempt_port in range(port, port + 20):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind(("", attempt_port))
+            port = attempt_port
+            break
+        except OSError:
+            continue
+    else:
+        print(f"  Error: no available port in range {port}-{port + 19}")
+        sys.exit(1)
+
+    # Get machine's local IP for remote access hint
+    local_ip = "0.0.0.0"
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+    except Exception:
+        pass
+
+    handler = http.server.SimpleHTTPRequestHandler
+
+    class QuietHandler(handler):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, directory=serve_dir, **kw)
+
+        def log_message(self, format, *a):
+            pass  # suppress per-request logs
+
+    print(f"\n  Serving dashboard at:")
+    print(f"    Local:   http://localhost:{port}/{filename}")
+    print(f"    Network: http://{local_ip}:{port}/{filename}")
+    print(f"\n  Press Ctrl+C to stop.\n")
+
+    with socketserver.TCPServer(("", port), QuietHandler) as httpd:
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            print("\n  Server stopped.")
 
 
 def generate_dashboard(coord_path):
@@ -2547,14 +2602,27 @@ if __name__ == "__main__":
         compare_snapshots()
     elif args[0] == "dashboard":
         cp = None
+        serve = False
+        serve_port = 8080
         for i, a in enumerate(args):
             if a == "--coord-path" and i + 1 < len(args):
                 cp = args[i + 1]
-                break
+            elif a == "--serve":
+                serve = True
+            elif a == "--port" and i + 1 < len(args):
+                try:
+                    serve_port = int(args[i + 1])
+                except ValueError:
+                    print(f"[Error] Invalid --port value: {args[i + 1]}")
+                    sys.exit(1)
+                serve = True
         if not cp:
             print("Usage: python3 measure.py dashboard --coord-path /tmp/token-optimizer-XXXXXXXXXX")
+            print("       python3 measure.py dashboard --coord-path PATH --serve [--port 8080]")
             sys.exit(1)
-        generate_dashboard(cp)
+        out = generate_dashboard(cp)
+        if serve:
+            _serve_dashboard(out, port=serve_port)
     elif args[0] == "collect":
         days = 90
         quiet = "--quiet" in args or "-q" in args
@@ -2601,6 +2669,8 @@ if __name__ == "__main__":
         print("  python3 measure.py snapshot after       # Save post-optimization snapshot")
         print("  python3 measure.py compare              # Compare before vs after")
         print("  python3 measure.py dashboard --coord-path PATH  # Interactive dashboard")
+        print("  python3 measure.py dashboard --coord-path PATH --serve  # Serve over HTTP (headless)")
+        print("  python3 measure.py dashboard --coord-path PATH --serve --port 9000  # Custom port")
         print("  python3 measure.py health               # Check running session health")
         print("  python3 measure.py trends               # Usage trends (last 30 days)")
         print("  python3 measure.py trends --days 7      # Usage trends (last 7 days)")

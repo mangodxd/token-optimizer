@@ -134,6 +134,16 @@ After the audit, you get an interactive HTML dashboard that breaks down exactly 
 
 Every component is clickable. Expand any item to see why it matters, what the trade-offs are, and what changes. Toggle the fixes you want, and copy a ready-to-paste optimization prompt.
 
+**Headless / remote server**: If you're running without a GUI, serve the dashboard over HTTP:
+
+```bash
+python3 ~/.claude/skills/token-optimizer/scripts/measure.py dashboard --coord-path PATH --serve
+# Dashboard available at http://your-server-ip:8080/dashboard.html
+
+# Custom port:
+python3 measure.py dashboard --coord-path PATH --serve --port 9000
+```
+
 ## How It Works
 
 ![5-phase optimization flow](skills/token-optimizer/assets/how-it-works.svg)
