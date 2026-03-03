@@ -2,7 +2,7 @@
   <img src="skills/token-optimizer/assets/logo.svg" alt="Token Optimizer" width="780">
 </p>
 
-<p align="center"><strong>Run <code>/context</code> on a fresh Claude Code session. See how much is already gone.<br>This tool shows you where it went and gets it back.</strong></p>
+<p align="center"><strong>Run <code>/context</code> on a fresh Claude Code session. See how much is already gone.<br>Find the ghost tokens, the invisible overhead, the context window tax. Get it back.</strong></p>
 
 ![Token Optimizer in action](skills/token-optimizer/assets/hero-terminal.svg)
 
@@ -29,7 +29,7 @@ Updates: `cd ~/.claude/token-optimizer && git pull`. The installer uses a symlin
 
 ## The Problem
 
-Every message you send to Claude Code re-sends everything: system prompt, tool definitions, MCP servers, skills, commands, CLAUDE.md, MEMORY.md, and system reminders. The API is stateless. No memory between messages. The full stack, replayed every time.
+Every message you send to Claude Code re-sends everything: system prompt, tool definitions, MCP servers, skills, commands, CLAUDE.md, MEMORY.md, and system reminders. The API is stateless. No memory between messages. The full stack, replayed every time. These are the ghost tokens: invisible overhead that eats your context window before you type a word.
 
 Prompt caching makes this [cheap](https://code.claude.com/docs/en/costs) (90% cost reduction on cached tokens). But cheap doesn't mean small. Those tokens still fill your context window, count toward rate limits, and degrade output quality past 50-70% fill.
 
@@ -41,7 +41,7 @@ The more you've customized Claude Code, the worse it gets.
 
 Your 200K context window gets eaten from multiple directions:
 
-**Fixed overhead** (everyone pays, can't change): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% of your window, gone before anything else loads.
+**Fixed overhead** (everyone pays, can't change): System prompt (~3K tokens) plus built-in tool definitions (12-17K tokens). About 8-10% of your window, gone before anything else loads. Common misconception: the "system prompt" is often reported as ~3K tokens. But built-in tools load alongside it every message. The real irreducible floor is ~15K, not ~3K. Posts quoting the base prompt alone understate overhead by 5x.
 
 **Autocompact buffer**: When autocompact is on (the default), Claude Code reserves headroom for compaction. In practice, roughly 30-35K tokens (~16% of your window) sit empty. Run `/context` on a fresh session to see the exact number.
 
