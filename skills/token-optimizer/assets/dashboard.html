@@ -1491,7 +1491,19 @@ function getComponentDetails(data) {
   var components = [
     {
       key: 'claude_md', name: 'CLAUDE.md', tokens: ct,
-      sub: (c.claude_md_global ? c.claude_md_global.lines : '?') + ' lines across global + project files',
+      sub: (function() {
+        var lines = 0, found = [];
+        for (var k in c) {
+          if (k.indexOf('claude_md') === 0 && c[k]) {
+            if (c[k].lines) lines += c[k].lines;
+            if (c[k].exists) found.push(
+              k.replace('claude_md_', '').replace('_dotclaude', ' (.claude/)').replace(/_/g, ' ')
+            );
+          }
+        }
+        if (found.length === 0) return 'No CLAUDE.md found (checked global + project)';
+        return lines + ' lines from ' + found.join(', ');
+      })(),
       what: 'Your CLAUDE.md files are loaded at the start of every session. They contain personality rules, key paths, workflow instructions, and quality gates that shape every Claude response.',
       top: [], issues: [],
       related: [
@@ -1631,14 +1643,16 @@ var DB = (function() {
   function renderOverview() {
     var tot = data.snapshot.totals;
     var total = tot.estimated_total, ctrl = tot.controllable_tokens;
-    var pct = ((total / 200000) * 100).toFixed(1);
+    var ctxWindow = (data.snapshot.context_window) || 200000;
+    var ctxLabel = (ctxWindow >= 1000000) ? (ctxWindow / 1000000) + 'M' : (ctxWindow / 1000) + 'K';
+    var pct = ((total / ctxWindow) * 100).toFixed(1);
 
     // Hero card
-    var remaining = 200000 - total;
+    var remaining = Math.max(0, ctxWindow - total);
     document.getElementById('hero-tag').textContent = fn(total) + ' tokens';
     document.getElementById('hero-total').textContent = fn(total);
     document.getElementById('hero-sub').innerHTML =
-      'tokens loaded before you type a word. You start every session with only <span>' + fn(remaining) + '</span> left for actual conversation.';
+      'tokens loaded before you type a word (' + ctxLabel + ' window). You start every session with only <span>' + fn(remaining) + '</span> left for actual conversation.';
 
     // Last updated timestamp
     var ts = data.generated_at ? new Date(data.generated_at).toLocaleString() : 'unknown';
@@ -1687,7 +1701,10 @@ var DB = (function() {
       'Core System is fixed by Claude Code. Everything else is yours to trim. The bigger the bar, the more tokens you can save.';
 
     // What You'd Save card
-    var planTokens = items.reduce(function(s, it) { return s + it.tokens; }, 0);
+    var planTokens = Math.min(
+      items.reduce(function(s, it) { return s + it.tokens; }, 0),
+      ctrl
+    );
     if (planTokens > 0) {
       document.getElementById('stat-potential').innerHTML = '~' + fn(planTokens) + ' <span class="mini-label">tokens recoverable</span>';
       document.getElementById('potential-desc').textContent =

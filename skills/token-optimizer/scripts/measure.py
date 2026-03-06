@@ -49,6 +49,8 @@ TOKENS_PER_SKILL_APPROX = 100
 TOKENS_PER_COMMAND_APPROX = 50
 # Tokens per MCP deferred tool name in Tool Search menu
 TOKENS_PER_DEFERRED_TOOL = 15
+# Tokens per eagerly-loaded MCP tool (full schema in system prompt)
+TOKENS_PER_EAGER_TOOL = 150
 # Average tools per MCP server (rough estimate when tool count unknown)
 AVG_TOOLS_PER_SERVER = 8
 
@@ -188,9 +190,10 @@ def get_session_baselines(limit=10):
 
 
 def get_mcp_config_paths():
-    """Return MCP config paths for the current platform."""
+    """Return MCP config paths for the current platform (global + project)."""
     paths = [
-        CLAUDE_DIR / "settings.json",  # Claude Code primary config
+        CLAUDE_DIR / "settings.json",  # Claude Code global config
+        Path.cwd() / ".claude" / "settings.json",  # Project-level MCP servers
     ]
 
     system = platform.system()
@@ -203,15 +206,17 @@ def get_mcp_config_paths():
 
 
 def count_mcp_tools_and_servers():
-    """Count MCP servers and estimate deferred tool overhead."""
+    """Count MCP servers and estimate tool overhead (deferred vs eager)."""
     server_count = 0
     tool_count_estimate = 0
     seen_names = set()
     server_names = []
+    server_scopes = {}  # name -> "global" or "project"
 
     for config_path in get_mcp_config_paths():
         if not config_path.exists():
             continue
+        scope = "project" if ".claude" in config_path.parts and config_path.parent.name == ".claude" else "global"
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = json.load(f)
@@ -220,21 +225,41 @@ def count_mcp_tools_and_servers():
                 if name not in seen_names:
                     seen_names.add(name)
                     server_names.append(name)
+                    server_scopes[name] = scope
                     server_count += 1
         except (json.JSONDecodeError, PermissionError, OSError):
             continue
 
     # Estimate tool count: avg tools per server
     tool_count_estimate = server_count * AVG_TOOLS_PER_SERVER
-    # Deferred tool tokens: ~15 tokens per tool name in Tool Search menu
-    tokens = tool_count_estimate * TOKENS_PER_DEFERRED_TOOL
+
+    # Detect deferred (lazy) vs eager loading
+    # Modern Claude Code (2.0+) uses deferred loading by default.
+    # Deferred: ~15 tokens/tool (just name in ToolSearch menu)
+    # Eager: ~150 tokens/tool (full JSON schema in system prompt)
+    deferred = True
+    if os.environ.get("CLAUDE_CODE_DISABLE_MCP_DEFERRED") == "1":
+        deferred = False
+
+    if deferred:
+        tokens_per_tool = TOKENS_PER_DEFERRED_TOOL
+        loading_mode = "deferred"
+    else:
+        tokens_per_tool = TOKENS_PER_EAGER_TOOL
+        loading_mode = "eager"
+
+    tokens = tool_count_estimate * tokens_per_tool
 
     return {
         "server_count": server_count,
         "server_names": server_names,
+        "server_scopes": server_scopes,
         "tool_count_estimate": tool_count_estimate,
         "tokens": tokens,
-        "note": f"Estimated ~{AVG_TOOLS_PER_SERVER} tools/server x ~{TOKENS_PER_DEFERRED_TOOL} tokens/tool (Tool Search deferred)",
+        "loading_mode": loading_mode,
+        "tokens_if_eager": tool_count_estimate * TOKENS_PER_EAGER_TOOL,
+        "tokens_if_deferred": tool_count_estimate * TOKENS_PER_DEFERRED_TOOL,
+        "note": f"~{AVG_TOOLS_PER_SERVER} tools/server x ~{tokens_per_tool} tokens/tool ({loading_mode} loading)",
     }
 
 
@@ -374,21 +399,26 @@ def measure_components():
         }
 
     # Find project CLAUDE.md files in cwd and parents
+    # Claude Code loads from both <project>/CLAUDE.md and <project>/.claude/CLAUDE.md
     cwd = Path.cwd()
     for parent in [cwd] + list(cwd.parents)[:3]:
         if parent == HOME:
             continue  # Already checked ~/CLAUDE.md
-        claude_md = parent / "CLAUDE.md"
-        if claude_md.exists():
-            real = resolve_real_path(claude_md)
-            if real not in seen_real_paths:
-                seen_real_paths.add(real)
-                components[f"claude_md_project_{parent.name}"] = {
-                    "path": str(claude_md),
-                    "exists": True,
-                    "tokens": estimate_tokens_from_file(claude_md),
-                    "lines": count_lines(claude_md),
-                }
+        candidates = [
+            (f"claude_md_project_{parent.name}", parent / "CLAUDE.md"),
+            (f"claude_md_project_{parent.name}_dotclaude", parent / ".claude" / "CLAUDE.md"),
+        ]
+        for comp_key, claude_md in candidates:
+            if claude_md.exists():
+                real = resolve_real_path(claude_md)
+                if real not in seen_real_paths:
+                    seen_real_paths.add(real)
+                    components[comp_key] = {
+                        "path": str(claude_md),
+                        "exists": True,
+                        "tokens": estimate_tokens_from_file(claude_md),
+                        "lines": count_lines(claude_md),
+                    }
 
     # MEMORY.md (check all project dirs, not just cwd match)
     projects_dir = find_projects_dir()
@@ -567,25 +597,30 @@ def measure_components():
     }
 
     # .claude/rules/ directory
-    rules_dir = CLAUDE_DIR / "rules"
+    rules_dirs = [
+        ("global", CLAUDE_DIR / "rules"),
+        ("project", cwd / ".claude" / "rules"),
+    ]
     rules_count = 0
     rules_tokens = 0
     rules_files = []
     rules_always_loaded = 0
-    if rules_dir.exists() and rules_dir.is_dir():
-        for f in sorted(rules_dir.iterdir()):
-            if f.is_file() and f.suffix == ".md":
-                rules_count += 1
-                tokens = estimate_tokens_from_file(f)
-                rules_tokens += tokens
-                has_paths = _has_paths_frontmatter(f)
-                rules_files.append({
-                    "name": f.name,
-                    "tokens": tokens,
-                    "path_scoped": has_paths,
-                })
-                if not has_paths:
-                    rules_always_loaded += 1
+    for scope, rules_dir in rules_dirs:
+        if rules_dir.exists() and rules_dir.is_dir():
+            for f in sorted(rules_dir.iterdir()):
+                if f.is_file() and f.suffix == ".md":
+                    rules_count += 1
+                    tokens = estimate_tokens_from_file(f)
+                    rules_tokens += tokens
+                    has_paths = _has_paths_frontmatter(f)
+                    rules_files.append({
+                        "name": f.name,
+                        "tokens": tokens,
+                        "path_scoped": has_paths,
+                        "scope": scope,
+                    })
+                    if not has_paths:
+                        rules_always_loaded += 1
     components["rules"] = {
         "count": rules_count,
         "tokens": rules_tokens,
@@ -632,6 +667,7 @@ def measure_components():
         "global_exists": settings_local.exists(),
         "project_exists": project_settings_local.exists(),
         "exists": settings_local.exists() or project_settings_local.exists(),
+        "includeGitInstructions": _cached_settings.get("includeGitInstructions", True) if _cached_settings else True,
     }
 
     # Skill frontmatter quality (collected during skills scan above)
@@ -675,6 +711,19 @@ def calculate_totals(components):
     }
 
 
+def detect_context_window():
+    """Detect context window size. 200K default, 1M for eligible setups."""
+    if os.environ.get("CLAUDE_CODE_DISABLE_1M_CONTEXT") == "1":
+        return 200_000
+    raw = os.environ.get("TOKEN_OPTIMIZER_CONTEXT_SIZE", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+    return 200_000
+
+
 def sanitize_label(label):
     """Sanitize snapshot label to prevent path traversal."""
     if not re.match(r'^[a-zA-Z0-9_-]+$', label):
@@ -704,6 +753,7 @@ def take_snapshot(label):
         "components": components,
         "session_baselines": baselines,
         "totals": totals,
+        "context_window": detect_context_window(),
     }
 
     filepath = SNAPSHOT_DIR / f"snapshot_{label}.json"
@@ -758,7 +808,9 @@ def print_snapshot_summary(snapshot):
     mcp_tokens = mcp.get("tokens", 0)
     srv_count = mcp.get("server_count", 0)
     tool_est = mcp.get("tool_count_estimate", 0)
-    print(f"  {'MCP deferred tools (est.)':<35s} {mcp_tokens:>6,} tokens  [{srv_count} servers, ~{tool_est} tools]")
+    loading_mode = mcp.get("loading_mode", "deferred")
+    mcp_label = f"MCP tools ({loading_mode})"
+    print(f"  {mcp_label:<35s} {mcp_tokens:>6,} tokens  [{srv_count} servers, ~{tool_est} tools]")
 
     # Rules
     rules = c.get("rules", {})
@@ -781,8 +833,10 @@ def print_snapshot_summary(snapshot):
 
     print(f"  {'=' * 53}")
     print(f"  {'ESTIMATED TOTAL':<35s} {t['estimated_total']:>6,} tokens")
-    pct_of_200k = t['estimated_total'] / 200_000 * 100
-    print(f"  {'Context used before typing':<35s} {pct_of_200k:>5.1f}% of 200K window")
+    ctx_window = detect_context_window()
+    ctx_label = f"{ctx_window // 1000}K"
+    pct_of_ctx = t['estimated_total'] / ctx_window * 100
+    print(f"  {'Context used before typing':<35s} {pct_of_ctx:>5.1f}% of {ctx_label} window")
 
     # Session baselines
     baselines = snapshot.get("session_baselines", [])
@@ -904,7 +958,7 @@ def compare_snapshots():
 
     # MCP (now included!)
     rows.append((
-        "MCP deferred tools",
+        "MCP tools",
         bc.get("mcp_tools", bc.get("mcp_servers", {})).get("tokens", 0),
         ac.get("mcp_tools", ac.get("mcp_servers", {})).get("tokens", 0),
     ))
@@ -948,9 +1002,11 @@ def compare_snapshots():
 
     # Context budget impact (not dollar amounts)
     if total_saved > 0:
-        before_pct = (total_before + 15000) / 200_000 * 100
-        after_pct = (total_after + 15000) / 200_000 * 100
-        print(f"\n  Context budget: {before_pct:.1f}% -> {after_pct:.1f}% of 200K window")
+        ctx_window = detect_context_window()
+        ctx_label = f"{ctx_window // 1000}K"
+        before_pct = (total_before + 15000) / ctx_window * 100
+        after_pct = (total_after + 15000) / ctx_window * 100
+        print(f"\n  Context budget: {before_pct:.1f}% -> {after_pct:.1f}% of {ctx_label} window")
         print(f"  That's {total_saved:,} more tokens for actual work per message.")
 
     # .claudeignore and hooks changes
@@ -1140,6 +1196,7 @@ def generate_dashboard(coord_path):
         "components": components,
         "totals": totals,
         "session_baselines": baselines,
+        "context_window": detect_context_window(),
     }
 
     # Read audit files
@@ -1244,6 +1301,7 @@ def generate_standalone_dashboard(days=30, quiet=False):
         "components": components,
         "totals": totals,
         "session_baselines": get_session_baselines(5),
+        "context_window": detect_context_window(),
     }
 
     if not quiet:
@@ -1550,6 +1608,22 @@ def generate_auto_recommendations(components, trends=None, days=30):
             f"Note: ask yourself which servers you actually use in conversation before disabling. "
             f"Some servers are used interactively even if they have no code references. "
             f"~{mcp_tokens:,} tokens recoverable."
+        )
+
+    # --- Rule 14: Git instructions in system prompt ---
+    settings_local = components.get("settings_local", {})
+    include_git = settings_local.get("includeGitInstructions", True) if isinstance(settings_local, dict) else True
+    if os.environ.get("CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS") == "1":
+        include_git = False
+    if include_git:
+        deep.append(
+            "**Disable built-in git instructions (`includeGitInstructions: false`)**: "
+            "Claude Code injects ~2,000 tokens of commit/PR workflow instructions into every session. "
+            "If you don't use Claude for git operations, disable this in settings.json.\n"
+            "  Add to ~/.claude/settings.json: `\"includeGitInstructions\": false`\n"
+            "  Or set env var: CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS=1\n"
+            "  This reduces Core System overhead, the only user setting that does. "
+            "~2,000 tokens recoverable."
         )
 
     # --- Rule 13: Compact habits (always include) ---
@@ -2852,6 +2926,17 @@ def _collect_health_data():
             f"{stale_count} session{'s' if stale_count != 1 else ''} running "
             f"24+ hours. Check if still needed, long sessions accumulate context bloat."
         )
+
+    # Version-specific warnings
+    if installed_version:
+        try:
+            version_parts = tuple(int(x) for x in installed_version.split(".")[:3])
+            if version_parts < (2, 1, 70):
+                recommendations.append(
+                    "Upgrade to Claude Code 2.1.70+ to fix skill listing re-injection on resume (~600 tokens/resume)."
+                )
+        except (ValueError, TypeError):
+            pass
 
     return {
         "installed_version": installed_version,

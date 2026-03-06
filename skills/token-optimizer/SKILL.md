@@ -26,7 +26,15 @@ fi
 ```
 Use `$MEASURE_PY` for all subsequent measure.py calls in this session.
 
-1. **Quick pre-check** (detect minimal setups):
+1. **Detect context window size**:
+   Check if `TOKEN_OPTIMIZER_CONTEXT_SIZE` env var is already set. If not:
+   - Check for `ANTHROPIC_API_KEY` env var (indicates API usage, possibly 1M context)
+   - If API key found, ask the user: "You appear to be using the API. Do you have 1M token context (Opus 4.6)? If so I'll calibrate for 1M instead of 200K."
+   - If they confirm 1M, `export TOKEN_OPTIMIZER_CONTEXT_SIZE=1000000` for this session
+   - If no API key or they say no, default is 200K (no action needed)
+   Keep this quick, one question max. Don't belabor it.
+
+2. **Quick pre-check** (detect minimal setups):
    Run `python3 $MEASURE_PY report`.
    If estimated controllable tokens < 1,000 and no CLAUDE.md exists, short-circuit:
    ```
@@ -35,7 +43,7 @@ Use `$MEASURE_PY` for all subsequent measure.py calls in this session.
    default agents to haiku, batch requests.
    ```
 
-2. **Backup everything first** (before touching anything):
+3. **Backup everything first** (before touching anything):
 ```bash
 BACKUP_DIR="$HOME/.claude/_backups/token-optimizer-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
@@ -58,14 +66,14 @@ if [ -z "$(ls -A "$BACKUP_DIR" 2>/dev/null)" ]; then
 fi
 ```
 
-3. **Create coordination folder**:
+4. **Create coordination folder**:
 ```bash
 COORD_PATH=$(mktemp -d /tmp/token-optimizer-XXXXXXXXXX)
 [ -d "$COORD_PATH" ] || { echo "[Error] Failed to create coordination folder. Check /tmp permissions."; exit 1; }
 mkdir -p "$COORD_PATH"/{audit,analysis,plan,verification}
 ```
 
-4. **Check SessionEnd hook** (first-time setup, skips silently if already installed):
+5. **Check SessionEnd hook** (first-time setup, skips silently if already installed):
 ```bash
 python3 $MEASURE_PY check-hook
 ```
@@ -99,7 +107,7 @@ python3 $MEASURE_PY check-hook
 
    If skipped, note it and continue. The audit still works without it, but the Trends tab will only have data from manual `measure.py collect` runs.
 
-5. **Check persistent dashboard daemon** (macOS only, first-time setup, skips silently if already running):
+6. **Check persistent dashboard daemon** (macOS only, first-time setup, skips silently if already running):
 ```bash
 python3 $MEASURE_PY setup-daemon --dry-run
 ```
@@ -362,4 +370,4 @@ Backups are never automatically deleted. They accumulate in `~/.claude/_backups/
 - Never delete files, always archive
 - Use appropriate models (with fallbacks) for each task
 - Show before/after diffs
-- Frame savings as context budget (% of 200K), not dollar amounts
+- Frame savings as context budget (% of context window), not dollar amounts
