@@ -17,6 +17,9 @@ Usage:
     python3 measure.py trends             # Usage trends (last 30 days)
     python3 measure.py trends --days 7    # Usage trends (shorter window)
     python3 measure.py trends --json      # Machine-readable output
+    python3 measure.py coach               # Interactive coaching data
+    python3 measure.py coach --json        # Coaching data as JSON
+    python3 measure.py coach --focus skills # Focus on skill optimization
     python3 measure.py collect             # Collect sessions into SQLite DB
     python3 measure.py collect --quiet     # Silent mode (for SessionEnd hook)
 
@@ -316,6 +319,7 @@ TOKEN_RELEVANT_ENV_VARS = [
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
     "BASH_MAX_OUTPUT_LENGTH",
+    "ENABLE_CLAUDEAI_MCP_SERVERS",
 ]
 
 
@@ -1245,6 +1249,13 @@ def generate_dashboard(coord_path):
     except Exception:
         health = None
 
+    # Generate coach data for the Coach tab (reuse already-collected components/trends)
+    print("  Generating coach data...")
+    try:
+        coach = generate_coach_data(components=components, trends=trends)
+    except Exception:
+        coach = None
+
     # Assemble data
     data = {
         "snapshot": snapshot,
@@ -1252,6 +1263,7 @@ def generate_dashboard(coord_path):
         "plan": plan,
         "trends": trends,
         "health": health,
+        "coach": coach,
         "generated_at": datetime.now().isoformat(),
     }
 
@@ -1325,12 +1337,21 @@ def generate_standalone_dashboard(days=30, quiet=False):
     if not quiet and rec_count > 0:
         print(f"  Found {rec_count} auto-recommendations")
 
+    # Generate coach data for the Coach tab (reuse already-collected components/trends)
+    if not quiet:
+        print("  Generating coach data...")
+    try:
+        coach = generate_coach_data(components=components, trends=trends)
+    except Exception:
+        coach = None
+
     data = {
         "snapshot": snapshot,
         "audit": {},
         "plan": auto_plan if auto_plan else None,
         "trends": trends,
         "health": health,
+        "coach": coach,
         "standalone": True,
         "auto_plan": True,
         "generated_at": datetime.now().isoformat(),
@@ -1626,6 +1647,24 @@ def generate_auto_recommendations(components, trends=None, days=30):
             "~2,000 tokens recoverable."
         )
 
+    # --- Rule 15: claude.ai MCP servers ---
+    settings_env_found = components.get("settings_env", {}).get("found", {})
+    claudeai_val = settings_env_found.get(
+        "ENABLE_CLAUDEAI_MCP_SERVERS",
+        os.environ.get("ENABLE_CLAUDEAI_MCP_SERVERS", ""),
+    )
+    if str(claudeai_val).lower() != "false":
+        medium.append(
+            "**Review claude.ai MCP servers (`ENABLE_CLAUDEAI_MCP_SERVERS`)**: "
+            "Claude Code can sync MCP servers from your claude.ai account settings. "
+            "These cloud-synced servers are separate from your local settings.json MCP servers "
+            "and may add tool definitions you don't use in the CLI.\n"
+            "  Check if you have cloud-synced MCPs: look for servers you didn't configure locally. "
+            "To opt out: add `\"ENABLE_CLAUDEAI_MCP_SERVERS\": \"false\"` to the `env` section "
+            "of your ~/.claude/settings.json. This prevents cloud MCPs from loading in CLI sessions "
+            "while keeping them available on claude.ai."
+        )
+
     # --- Rule 13: Compact habits (always include) ---
     habits.append(
         "**Use /compact at 50-70% context fill**: "
@@ -1667,6 +1706,288 @@ def generate_auto_recommendations(components, trends=None, days=30):
     plan_md = "\n\n".join(sections) if sections else ""
     total_count = len(quick) + len(medium) + len(deep) + len(habits)
     return plan_md, total_count
+
+
+def generate_coach_data(focus=None, components=None, trends=None):
+    """Generate structured coaching data for Token Coach mode.
+
+    Args:
+        focus: Optional focus area ('skills', 'agentic', 'memory')
+        components: Pre-computed measure_components() result (avoids duplicate call)
+        trends: Pre-computed trends data (avoids duplicate call)
+
+    Returns a dict with:
+    - snapshot: current component measurements
+    - patterns: detected patterns (good and bad)
+    - questions: suggested clarifying questions
+    - health_score: 0-100 composite score
+    - focus_area: if user specified a focus
+    """
+    if components is None:
+        components = measure_components()
+    totals = calculate_totals(components)
+    context_window = detect_context_window()
+
+    # Collect trends if not provided
+    if trends is None:
+        try:
+            trends = _collect_trends_data(days=30)
+        except Exception:
+            pass
+
+    # --- Pattern Detection ---
+    patterns_good = []
+    patterns_bad = []
+    questions = []
+
+    # Score components (0-100, start at 100 and deduct)
+    score = 100
+
+    # Check skills count
+    skills = components.get("skills", {})
+    skill_count = skills.get("count", 0)
+    skill_tokens = skills.get("tokens", 0)
+    if skill_count > 50:
+        patterns_bad.append({
+            "name": "50-Skill Trap",
+            "severity": "high",
+            "detail": f"{skill_count} skills installed ({skill_tokens:,} tokens startup overhead)",
+            "fix": "Archive unused skills to ~/.claude/skills/_archived/",
+            "savings": f"~{(skill_count - 20) * TOKENS_PER_SKILL_APPROX:,} tokens if you keep 20",
+        })
+        score -= 15
+        questions.append(f"You have {skill_count} skills. Which do you actually use daily?")
+    elif skill_count > 30:
+        patterns_bad.append({
+            "name": "Skill Sprawl",
+            "severity": "medium",
+            "detail": f"{skill_count} skills installed ({skill_tokens:,} tokens)",
+            "fix": "Review and archive unused skills",
+            "savings": f"~100 tokens per archived skill",
+        })
+        score -= 8
+    elif skill_count > 0:
+        patterns_good.append({
+            "name": "Reasonable Skill Count",
+            "detail": f"{skill_count} skills ({skill_tokens:,} tokens)",
+        })
+
+    # Check CLAUDE.md size
+    claude_tokens = 0
+    for key in components:
+        if key.startswith("claude_md") and components[key].get("exists"):
+            claude_tokens += components[key].get("tokens", 0)
+    if claude_tokens > 1500:
+        patterns_bad.append({
+            "name": "CLAUDE.md Novel",
+            "severity": "high",
+            "detail": f"CLAUDE.md chain totals {claude_tokens:,} tokens (target: <800)",
+            "fix": "Move workflows to skills, standards to reference files",
+            "savings": f"~{claude_tokens - 800:,} tokens per message",
+        })
+        score -= 15
+        questions.append("Which CLAUDE.md sections do you reference most? Could any become skills?")
+    elif claude_tokens > 800:
+        patterns_bad.append({
+            "name": "Heavy CLAUDE.md",
+            "severity": "medium",
+            "detail": f"CLAUDE.md at {claude_tokens:,} tokens (target: <800)",
+            "fix": "Review for content that could move to skills",
+            "savings": f"~{claude_tokens - 800:,} tokens per message",
+        })
+        score -= 8
+    elif claude_tokens > 0:
+        patterns_good.append({
+            "name": "Lean CLAUDE.md",
+            "detail": f"{claude_tokens:,} tokens (under 800 target)",
+        })
+
+    # Check MEMORY.md
+    mem = components.get("memory_md", {})
+    mem_lines = mem.get("lines", 0)
+    if mem_lines > 200:
+        patterns_bad.append({
+            "name": "Oversized MEMORY.md",
+            "severity": "medium",
+            "detail": f"{mem_lines} lines (200-line auto-load cutoff)",
+            "fix": "Move detailed notes to topic files in memory/ directory",
+            "savings": f"~{(mem_lines - 200) * 15:,} tokens",
+        })
+        score -= 10
+    elif mem_lines > 150:
+        patterns_bad.append({
+            "name": "MEMORY.md Approaching Limit",
+            "severity": "low",
+            "detail": f"{mem_lines} lines ({200 - mem_lines} lines of headroom)",
+            "fix": "Proactively move detailed notes to topic files",
+            "savings": "Preventive",
+        })
+        score -= 3
+
+    # Check MCP servers
+    mcp = components.get("mcp_tools", {})
+    mcp_servers = mcp.get("server_count", 0)
+    mcp_tokens = mcp.get("tokens", 0)
+    if mcp_servers > 10:
+        patterns_bad.append({
+            "name": "MCP Sprawl",
+            "severity": "high",
+            "detail": f"{mcp_servers} MCP servers ({mcp_tokens:,} tokens)",
+            "fix": "Disable unused servers in settings.json",
+            "savings": f"~50-100 tokens per disabled server",
+        })
+        score -= 12
+        questions.append(f"You have {mcp_servers} MCP servers. Which do you actually use in CLI?")
+    elif mcp_servers > 5:
+        patterns_bad.append({
+            "name": "Many MCP Servers",
+            "severity": "low",
+            "detail": f"{mcp_servers} servers ({mcp_tokens:,} tokens)",
+            "fix": "Review for unused servers",
+            "savings": "~50-100 tokens per disabled server",
+        })
+        score -= 5
+
+    # Check .claudeignore
+    ignore = components.get("claudeignore", {})
+    if not ignore.get("exists"):
+        patterns_bad.append({
+            "name": "Missing .claudeignore",
+            "severity": "medium",
+            "detail": "No .claudeignore found",
+            "fix": "Create .claudeignore in project root",
+            "savings": "500-2,000 tokens (prevents system reminder injection)",
+        })
+        score -= 8
+
+    # Check rules
+    rules = components.get("rules", {})
+    rules_count = rules.get("count", 0)
+    always_loaded = rules.get("always_loaded", 0)
+    if always_loaded > 5:
+        patterns_bad.append({
+            "name": "Unscoped Rules",
+            "severity": "medium",
+            "detail": f"{always_loaded} of {rules_count} rules lack paths: scoping",
+            "fix": "Add paths: frontmatter to scope rules to specific directories",
+            "savings": f"~{rules.get('tokens', 0):,} tokens for path-scoped rules",
+        })
+        score -= 8
+
+    # Check @imports
+    imports = components.get("imports", {})
+    if imports.get("count", 0) > 0 and imports.get("tokens", 0) > 500:
+        patterns_bad.append({
+            "name": "Import Avalanche",
+            "severity": "medium",
+            "detail": f"{imports['count']} @imports totaling {imports['tokens']:,} tokens",
+            "fix": "Move large imports to skills or reference files",
+            "savings": f"~{imports['tokens']:,} tokens per message",
+        })
+        score -= 10
+
+    # Check hooks
+    hooks = components.get("hooks", {})
+    if hooks.get("configured") and "SessionEnd" in hooks.get("names", []):
+        patterns_good.append({
+            "name": "SessionEnd Hook Installed",
+            "detail": "Usage tracking active",
+        })
+    else:
+        patterns_bad.append({
+            "name": "No SessionEnd Hook",
+            "severity": "low",
+            "detail": "Usage tracking not active",
+            "fix": "Run: python3 measure.py setup-hook",
+            "savings": "Enables trends data for better coaching",
+        })
+        score -= 3
+
+    # Check model mix from trends
+    if trends:
+        model_mix = trends.get("model_mix", {})
+        total_model_tokens = sum(model_mix.values()) if model_mix else 0
+        if total_model_tokens > 0:
+            opus_pct = model_mix.get("opus", 0) / total_model_tokens * 100
+            haiku_pct = model_mix.get("haiku", 0) / total_model_tokens * 100
+            if opus_pct > 70:
+                patterns_bad.append({
+                    "name": "Opus Addiction",
+                    "severity": "medium",
+                    "detail": f"{opus_pct:.0f}% Opus, {haiku_pct:.0f}% Haiku",
+                    "fix": "Route data-gathering agents to Haiku, analysis to Sonnet",
+                    "savings": "50-75% cost reduction (same context, less spend)",
+                })
+                score -= 8
+
+        # Check unused skills from trends
+        never_used = trends.get("skills", {}).get("never_used", [])
+        installed_count = trends.get("skills", {}).get("installed_count", 0)
+        if len(never_used) >= 5:
+            patterns_bad.append({
+                "name": "Unused Skills",
+                "severity": "high",
+                "detail": f"{len(never_used)} of {installed_count} skills never used in 30 days",
+                "fix": "Archive to ~/.claude/skills/_archived/",
+                "savings": f"~{len(never_used) * TOKENS_PER_SKILL_APPROX:,} tokens/session",
+            })
+            if score > 70:  # Don't double-penalize with 50-Skill Trap
+                score -= 10
+
+    # Check verbose skill descriptions
+    quality = components.get("skill_frontmatter_quality", {})
+    verbose = quality.get("verbose_skills", [])
+    if len(verbose) >= 3:
+        patterns_bad.append({
+            "name": "Verbose Skill Descriptions",
+            "severity": "low",
+            "detail": f"{len(verbose)} skills have descriptions over 200 chars",
+            "fix": "Tighten descriptions to under 80 characters",
+            "savings": "Minor per-skill, adds up with many skills",
+        })
+        score -= 3
+
+    # Check settings env vars for optimization opportunities
+    settings_env = components.get("settings_env", {}).get("found", {})
+    claudeai_val = settings_env.get("ENABLE_CLAUDEAI_MCP_SERVERS",
+                                     os.environ.get("ENABLE_CLAUDEAI_MCP_SERVERS", ""))
+    if str(claudeai_val).lower() != "false" and mcp_servers > 3:
+        questions.append("Cloud-synced MCP servers from claude.ai may be adding overhead. Have you reviewed which servers are cloud-synced vs local?")
+
+    # Clamp score
+    score = max(0, min(100, score))
+
+    # Build result
+    overhead_pct = (totals["estimated_total"] / context_window * 100) if context_window else 0
+    usable = context_window - totals["estimated_total"] - 33000  # subtract approx autocompact buffer
+
+    result = {
+        "snapshot": {
+            "total_overhead": totals["estimated_total"],
+            "controllable": totals["controllable_tokens"],
+            "fixed": totals["fixed_tokens"],
+            "context_window": context_window,
+            "overhead_pct": round(overhead_pct, 1),
+            "usable_tokens": max(0, usable),
+            "skill_count": skill_count,
+            "skill_tokens": skill_tokens,
+            "claude_md_tokens": claude_tokens,
+            "memory_md_lines": mem_lines,
+            "mcp_server_count": mcp_servers,
+            "mcp_tokens": mcp_tokens,
+            "rules_count": rules_count,
+            "rules_always_loaded": always_loaded,
+            "imports_count": imports.get("count", 0),
+            "imports_tokens": imports.get("tokens", 0),
+        },
+        "patterns_good": patterns_good,
+        "patterns_bad": patterns_bad,
+        "questions": questions,
+        "health_score": score,
+        "focus_area": focus,
+    }
+
+    return result
 
 
 def _find_all_jsonl_files(days=30):
@@ -3447,6 +3768,41 @@ if __name__ == "__main__":
         dry = "--dry-run" in args
         uninstall = "--uninstall" in args
         setup_daemon(dry_run=dry, uninstall=uninstall)
+    elif args[0] == "coach":
+        focus = None
+        output_json = "--json" in args
+        for i, a in enumerate(args):
+            if a == "--focus" and i + 1 < len(args):
+                focus = args[i + 1]
+        data = generate_coach_data(focus=focus)
+        if output_json:
+            print(json.dumps(data, indent=2))
+        else:
+            score = data["health_score"]
+            snap = data["snapshot"]
+            print(f"\n  Token Health Score: {score}/100")
+            print(f"  Startup overhead: {snap['total_overhead']:,} tokens ({snap['overhead_pct']}% of {snap['context_window'] // 1000}K)")
+            print(f"  Usable context: ~{snap['usable_tokens']:,} tokens (after overhead + autocompact buffer)")
+            print(f"  Skills: {snap['skill_count']} ({snap['skill_tokens']:,} tokens)")
+            print(f"  CLAUDE.md: {snap['claude_md_tokens']:,} tokens")
+            print(f"  MCP: {snap['mcp_server_count']} servers ({snap['mcp_tokens']:,} tokens)")
+            print()
+            if data["patterns_bad"]:
+                print("  Issues detected:")
+                for p in data["patterns_bad"]:
+                    sev = {"high": "!!!", "medium": "!!", "low": "!"}.get(p["severity"], "!")
+                    print(f"    [{sev}] {p['name']}: {p['detail']}")
+                print()
+            if data["patterns_good"]:
+                print("  Good practices:")
+                for p in data["patterns_good"]:
+                    print(f"    [OK] {p['name']}: {p['detail']}")
+                print()
+            if data["questions"]:
+                print("  Coaching questions:")
+                for q in data["questions"]:
+                    print(f"    ? {q}")
+                print()
     elif args[0] == "trends":
         days = 30
         output_json = False
@@ -3483,6 +3839,10 @@ if __name__ == "__main__":
         print("  python3 measure.py trends               # Usage trends (last 30 days)")
         print("  python3 measure.py trends --days 7      # Usage trends (last 7 days)")
         print("  python3 measure.py trends --json        # Machine-readable output")
+        print("  python3 measure.py coach                # Interactive coaching data")
+        print("  python3 measure.py coach --json         # Coaching data as JSON")
+        print("  python3 measure.py coach --focus skills  # Focus on skill optimization")
+        print("  python3 measure.py coach --focus agentic # Focus on multi-agent patterns")
         print("  python3 measure.py collect              # Collect sessions into SQLite DB")
         print("  python3 measure.py collect --quiet      # Silent mode (for hooks)")
         print("  python3 measure.py check-hook           # Check if SessionEnd hook is installed")

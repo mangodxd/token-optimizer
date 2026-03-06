@@ -1316,6 +1316,7 @@ window.__TOKEN_DATA__ = null;
         <div class="nav-separator"></div>
         <a class="nav-item" data-view="trends">Trends</a>
         <a class="nav-item" data-view="health">Health</a>
+        <a class="nav-item" data-view="coach">Coach</a>
       </div>
     </div>
     <div class="user-profile">workspace: <i id="nav-date"></i></div>
@@ -1375,6 +1376,8 @@ window.__TOKEN_DATA__ = null;
     <div class="view" id="view-trends"></div>
     <!-- Health View -->
     <div class="view" id="view-health"></div>
+    <!-- Coach View -->
+    <div class="view" id="view-coach"></div>
 
     <div class="main-footer">
       <span>Built by <a href="https://linkedin.com/in/alexgreensh" target="_blank" rel="noopener">Alex Greenshpun</a></span>
@@ -1608,6 +1611,7 @@ var DB = (function() {
     renderSectionViews();
     renderTrends();
     renderHealth();
+    renderCoach();
     updateRightPanel();
     bind();
 
@@ -2298,6 +2302,95 @@ var DB = (function() {
       });
       html += '</div>';
     }
+
+    el.innerHTML = html;
+  }
+
+  function renderCoach() {
+    var el = document.getElementById('view-coach');
+    if (!el) return;
+    var c = data.coach;
+
+    var html = '<div class="section-header">' +
+      '<div class="label">Advisory</div>' +
+      '<h1>Token Coach</h1>' +
+      '<p>Health score, pattern analysis, and coaching prompts for your setup.</p>' +
+      '</div>';
+
+    if (!c) {
+      html += '<div class="empty-state">No coaching data available. Run: python3 measure.py coach</div>';
+      el.innerHTML = html;
+      return;
+    }
+
+    // Health Score hero
+    var score = c.health_score || 0;
+    var scoreColor = score >= 80 ? 'var(--c-accent-cyan)' : score >= 50 ? '#ff9f43' : '#ff6b6b';
+    html += '<div class="card wide">' +
+      '<div class="card-header"><span>Token Health Score</span></div>' +
+      '<div style="text-align:center;padding:var(--s-4) 0;">' +
+      '<div style="font-size:72px;font-weight:700;font-family:var(--font-mono);color:' + scoreColor + ';text-shadow:0 0 20px ' + scoreColor + ';">' + score + '</div>' +
+      '<div class="label" style="font-size:18px;">out of 100</div>' +
+      '</div></div>';
+
+    // Snapshot summary
+    var snap = c.snapshot || {};
+    html += '<div class="dashboard-grid">' +
+      '<div class="card"><div class="card-header"><span>Startup Overhead</span></div>' +
+      '<div class="mini-stat">' + fn(snap.total_overhead || 0) + '</div>' +
+      '<div class="label">' + (snap.overhead_pct || 0) + '% of ' + ((snap.context_window || 200000) / 1000) + 'K</div></div>' +
+      '<div class="card"><div class="card-header"><span>Usable Context</span></div>' +
+      '<div class="mini-stat" style="color:var(--c-accent-cyan);">~' + fn(snap.usable_tokens || 0) + '</div>' +
+      '<div class="label">After overhead + autocompact buffer</div></div>' +
+      '</div>';
+
+    // Pattern cards
+    var bad = c.patterns_bad || [];
+    var good = c.patterns_good || [];
+
+    if (bad.length > 0) {
+      html += '<div class="card wide"><div class="card-header"><span>Issues Detected</span><span class="label">' + bad.length + ' found</span></div>';
+      bad.forEach(function(p) {
+        var sevColor = p.severity === 'high' ? '#ff6b6b' : p.severity === 'medium' ? '#ff9f43' : '#7d8ca3';
+        html += '<div style="border-left:3px solid ' + sevColor + ';padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(255,255,255,0.02);border-radius:0 6px 6px 0;">' +
+          '<div style="font-weight:500;color:' + sevColor + ';">' + esc(p.name) + '</div>' +
+          '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
+          '<div style="font-size:13px;margin-top:4px;"><span style="color:var(--c-accent-cyan);">Fix:</span> ' + esc(p.fix) + '</div>' +
+          '<div style="font-size:13px;color:var(--c-text-dim);">Savings: ' + esc(p.savings) + '</div>' +
+          '</div>';
+      });
+      html += '</div>';
+    }
+
+    if (good.length > 0) {
+      html += '<div class="card wide"><div class="card-header"><span>Good Practices</span></div>';
+      good.forEach(function(p) {
+        html += '<div style="border-left:3px solid var(--c-accent-cyan);padding:var(--s-3);margin-bottom:var(--s-2);background:rgba(0,240,255,0.02);border-radius:0 6px 6px 0;">' +
+          '<div style="font-weight:500;color:var(--c-accent-cyan);">' + esc(p.name) + '</div>' +
+          '<div style="color:var(--c-text-dim);font-size:14px;margin-top:4px;">' + esc(p.detail) + '</div>' +
+          '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Coaching questions
+    var questions = c.questions || [];
+    if (questions.length > 0) {
+      html += '<div class="card wide"><div class="card-header"><span>Coaching Questions</span></div>';
+      questions.forEach(function(q) {
+        html += '<div style="padding:var(--s-2) var(--s-3);color:var(--c-text-dim);font-size:14px;border-bottom:1px solid var(--c-border);">' + esc(q) + '</div>';
+      });
+      html += '</div>';
+    }
+
+    // Ask Coach prompt
+    html += '<div class="card wide">' +
+      '<div class="card-header"><span>Start a Coaching Session</span></div>' +
+      '<div style="padding:var(--s-3);">' +
+      '<p style="color:var(--c-text-dim);font-size:14px;margin-bottom:var(--s-3);">Copy this prompt into Claude Code to start an interactive coaching session:</p>' +
+      '<div id="coach-prompt" style="background:var(--c-bg);padding:var(--s-3);border-radius:6px;font-family:var(--font-mono);font-size:13px;color:var(--c-accent-cyan);cursor:pointer;border:1px solid var(--c-border);" onclick="navigator.clipboard.writeText(this.textContent).then(function(){document.getElementById(\'coach-copy-msg\').style.opacity=1;setTimeout(function(){document.getElementById(\'coach-copy-msg\').style.opacity=0;},1500);})">/token-coach</div>' +
+      '<div id="coach-copy-msg" style="color:var(--c-accent-cyan);font-size:13px;margin-top:var(--s-1);opacity:0;transition:opacity 0.3s;">Copied to clipboard!</div>' +
+      '</div></div>';
 
     el.innerHTML = html;
   }
