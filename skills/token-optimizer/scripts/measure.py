@@ -1506,10 +1506,12 @@ def generate_auto_recommendations(components, trends=None, days=30):
                 f"Each installed skill costs ~100 tokens in the startup menu, every session, whether you use it or not. "
                 f"These {len(never_used)} skills cost ~{overhead:,} tokens/session for zero benefit.\n"
                 f"  Skills: {skill_list}\n"
-                f"  Archive by moving to ~/.claude/skills/_archived/ (create this directory first). "
-                f"This removes them from the menu. Restore any skill by moving it back. "
-                f"Before archiving, scan the list for skills that are seasonal or rarely-needed-but-critical "
-                f"(e.g., a deploy skill you only use monthly). Keep those. Archive the rest. "
+                f"  Archive by moving to ~/.claude/_backups/skills-archived-$(date +%Y%m%d)/ (NOT inside skills/). "
+                f"This removes them from the menu. Restore any skill by moving it back.\n"
+                f"  ⚠️ Before archiving, check for dependencies: `grep -r \"[skill-name]\" ~/.claude/CLAUDE.md ~/.claude/rules/ ~/.claude/skills/`. "
+                f"Archiving a skill that other skills @import will break the dependent skill. "
+                f"Also keep skills that are seasonal or rarely-needed-but-critical "
+                f"(e.g., a deploy skill you only use monthly). "
                 f"~{overhead:,} tokens recoverable."
             )
         elif len(never_used) >= 2:
@@ -1528,10 +1530,13 @@ def generate_auto_recommendations(components, trends=None, days=30):
             "**Add file exclusion rules**: "
             "No permissions.deny rules found. Without them, Claude Code may access "
             "large or sensitive files, wasting tokens on irrelevant content.\n"
-            "  Add Read() deny patterns to .claude/settings.json to exclude files from Claude's "
+            "  Add Read() deny patterns to .claude/settings.json (project-level, recommended) to exclude files from Claude's "
             "context. Example: Read(./.env), Read(./build/**), Read(./dist/**), "
             "Read(./node_modules/**), Read(./**/*.log). "
-            "See the token-optimizer examples/ directory for a starter template."
+            "See the token-optimizer examples/ directory for a starter template.\n"
+            "  ⚠️ Apply at project level first, not global. Never deny *.sqlite or *.db globally "
+            "as this breaks tools that read databases (session memory, search indexes, WhatsApp). "
+            "Credential denies (.env, *.key) are usually safe and desired."
         )
 
     # --- Rule 5: Verbose skill descriptions ---

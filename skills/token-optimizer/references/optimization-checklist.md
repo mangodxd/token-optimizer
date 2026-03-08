@@ -82,6 +82,11 @@ Add `permissions.deny` rules to `.claude/settings.json` (project-level) or `~/.c
 
 **Why**: Files matching deny patterns are excluded from file discovery, search, and read operations. This is the official approach (replaces deprecated `ignorePatterns`). Security + token savings.
 
+**CAUTION**: Deny rules affect ALL tools in ALL sessions for the scope they're applied to.
+- Apply at **project level** (`.claude/settings.json`) first, not global. Easier to debug when something breaks.
+- **Never deny `*.sqlite` or `*.db` globally** unless you're certain no tools need database access. Many plugins (session memory, search indexes, WhatsApp) read SQLite files.
+- **Credential denies** (`.env`, `*.key`) are usually safe and desired, but will break any skill that reads API keys from those files at runtime.
+
 **Expected savings**: Varies (500-2,000 tokens/msg if you frequently edit media/deps)
 
 ---

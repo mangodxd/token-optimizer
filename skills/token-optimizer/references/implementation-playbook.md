@@ -64,6 +64,13 @@ mv ~/.claude/skills/[skill-name] ~/.claude/_backups/skills-archived-$(date +%Y%m
 
 List what will be archived, ask for confirmation before moving.
 
+**DEPENDENCY CHECK (mandatory before archival)**:
+Before archiving any skill, search for references to it:
+1. `grep -r "[skill-name]" ~/.claude/CLAUDE.md ~/.claude/rules/ ~/.claude/skills/` to find @imports or instructions that reference it
+2. Check if any MCP server tools depend on the skill (e.g., a skill that configures API keys used by MCP tools)
+3. Warn the user: "Archiving [skill] may break [dependent] which references it. Archive anyway?"
+If dependencies are found, list them explicitly and get confirmation.
+
 ---
 
 ## 4D: File Exclusion Rules
@@ -88,6 +95,14 @@ If missing, add `permissions.deny` rules to `.claude/settings.json` (project-lev
 
 **Why**: Files matching deny patterns are excluded from file discovery, search, and read operations. This is the officially supported approach (replaces deprecated `ignorePatterns`). Security + token savings.
 
+**SIDE EFFECT WARNING (mandatory before applying)**:
+Deny rules affect ALL tools in ALL sessions. Before applying:
+1. **Database deny rules** (`*.db`, `*.sqlite`): Will break any skill or MCP server that reads SQLite databases (e.g., session memory tools, local search indexes, WhatsApp MCP). Only add these at project level, never globally, unless you are certain no tools need database access.
+2. **Credential deny rules** (`.env`, `*.key`, `*.pem`): Will prevent Claude from reading these files. If any skill reads API keys from `.env` at runtime, it will fail silently. This is usually DESIRED for security, but warn the user.
+3. **Global vs project-level**: Recommend project-level (`./claude/settings.json`) over global (`~/.claude/settings.json`). Global rules affect every project and are harder to debug when something breaks.
+
+Always tell the user: "These deny rules will prevent Claude from reading matching files in ALL sessions. If any of your skills or MCP servers need access to these file types, they will stop working. Apply at project level first to test."
+
 ---
 
 ## 4E: MCP Server Guidance
@@ -109,6 +124,11 @@ To disable these MCP servers:
 
 Estimated savings: ~X tokens
 ```
+
+**CONSEQUENCE CHECK (mandatory before suggesting MCP disabling)**:
+1. Search CLAUDE.md, skills, and rules for references to the server's tool names (e.g., `mcp__[server]__*`)
+2. If ANY skill or instruction references the server's tools, warn: "Disabling [server] will break [skill/instruction] which uses [tool_name]. Disable anyway?"
+3. For servers with deferred tool loading: even if no hardcoded references exist, the user may invoke them conversationally. Ask: "Do you ever use [server] tools directly in conversation?" before recommending removal.
 
 ---
 

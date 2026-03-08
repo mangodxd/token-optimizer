@@ -214,7 +214,13 @@ Ready to implement? I can:
 1. Auto-fix safe changes (consolidate CLAUDE.md, archive skills)
 2. Generate permissions.deny rules (if missing)
 3. Create optimized CLAUDE.md template
-4. Show MCP servers to disable
+4. Show MCP servers to consider disabling
+
+⚠️ Some optimizations have side effects:
+- Deny rules block file access for ALL tools (may break MCP servers that read databases)
+- Archiving skills breaks anything that @imports them
+- Disabling MCP servers breaks skills that use their tools
+I'll check for dependencies and warn you before each change.
 
 What should we tackle first?
 ```
@@ -368,6 +374,9 @@ Backups are never automatically deleted. They accumulate in `~/.claude/_backups/
 - Create backups before any changes (`~/.claude/_backups/`)
 - Ask user before implementing
 - Never delete files, always archive
+- Check dependencies before archiving (skills, MCP servers, deny rules can break other tools)
+- Warn about side effects: deny rules block ALL tools, MCP removal breaks dependent skills, skill archival breaks @imports
+- Prefer project-level deny rules over global (easier to debug, less blast radius)
 - Use appropriate models (with fallbacks) for each task
 - Show before/after diffs
 - Frame savings as context budget (% of context window), not dollar amounts
