@@ -27,6 +27,14 @@
             "command": "python3 '$MEASURE_PY' compact-restore"
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '$MEASURE_PY' compact-restore --new-session-only"
+          }
+        ]
       }
     ],
     "Stop": [

@@ -36,6 +36,7 @@ import glob
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import platform
 from collections import deque
@@ -3477,7 +3478,6 @@ def check_hook():
 
 def _write_settings_atomic(settings_data):
     """Write settings.json atomically using tempfile + os.replace()."""
-    import tempfile
     tmp_fd, tmp_path = tempfile.mkstemp(
         dir=str(SETTINGS_PATH.parent),
         prefix=".settings-",
@@ -4632,15 +4632,15 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     return str(checkpoint_path)
 
 
-def compact_restore(session_id=None, cwd=None, is_compact=False, first_message=None):
+def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_only=False):
     """Restore context after compaction or for a new session.
 
     Called by SessionStart hook. Outputs recovery context to stdout
     (which gets injected into the model's context).
 
-    Logic:
-    - Post-compaction (same session, is_compact=True): inject full checkpoint
-    - New session: check relevance of recent checkpoints to first_message
+    Two hook groups call this:
+    - Post-compaction (matcher: "compact"): is_compact=True, injects full checkpoint
+    - New session (no matcher): new_session_only=True, prints pointer to recent checkpoint
     """
     if not CHECKPOINT_DIR.exists():
         return
@@ -4669,6 +4669,18 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, first_message=N
 
     sid_safe = _sanitize_session_id(session_id) if session_id else None
 
+    if new_session_only:
+        # New-session path: offer pointer to recent cross-session checkpoint.
+        # Skip if checkpoint is from the current session (compact-matcher hook handles that).
+        latest = checkpoints[0]
+        age_seconds = (datetime.now() - latest["created"]).total_seconds()
+        if age_seconds > 1800:
+            return
+        if sid_safe and sid_safe in latest["filename"]:
+            return
+        print(f"[Token Optimizer] Previous session checkpoint available at {latest['path']}. Ask me to load it if relevant.")
+        return
+
     if is_compact and sid_safe:
         # Post-compaction: find checkpoint for this session
         for cp in checkpoints:
@@ -4683,27 +4695,6 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, first_message=N
         if age_seconds < _CHECKPOINT_TTL_SECONDS:
             _print_checkpoint_body(latest["path"], "[Token Optimizer] Post-compaction context recovery:")
         return
-
-    # New session: check relevance
-    latest = checkpoints[0]
-    age_seconds = (datetime.now() - latest["created"]).total_seconds()
-
-    # Only consider checkpoints from last 30 minutes
-    if age_seconds > 1800:
-        return
-
-    if first_message:
-        relevance = keyword_relevance_score(first_message, latest["path"])
-        if relevance >= _RELEVANCE_THRESHOLD:
-            _print_checkpoint_body(
-                latest["path"],
-                f"[Token Optimizer] Previous session checkpoint loaded (relevance: {relevance:.0%}):",
-            )
-        else:
-            print(f"[Token Optimizer] Previous session checkpoint available at {latest['path']}. Ask me to load it if relevant.")
-    else:
-        # No first message yet (session just started), just offer a pointer
-        print(f"[Token Optimizer] Previous session checkpoint available at {latest['path']}.")
 
 
 def generate_compact_instructions(as_json=False, install=False, dry_run=False):
@@ -5024,18 +5015,46 @@ def setup_smart_compact(dry_run=False, uninstall=False, status_only=False):
     skipped = []
 
     for event, command in commands.items():
+        if event == "SessionStart":
+            # SessionStart needs TWO hook groups:
+            # 1. Post-compaction recovery (matcher: "compact")
+            # 2. New-session checkpoint pointer (no matcher, --new-session-only)
+            hooks.setdefault(event, [])
+            event_hooks = hooks[event]
+
+            has_compact_matcher = any(
+                g.get("matcher") == "compact"
+                and any("compact-restore" in h.get("command", "") for h in g.get("hooks", []))
+                for g in event_hooks
+            )
+            new_session_cmd = command + " --new-session-only"
+            has_new_session = any(
+                "matcher" not in g
+                and any("--new-session-only" in h.get("command", "") for h in g.get("hooks", []))
+                for g in event_hooks
+            )
+
+            added = False
+            if not has_compact_matcher:
+                event_hooks.append({"matcher": "compact", "hooks": [{"type": "command", "command": command}]})
+                added = True
+            if not has_new_session:
+                event_hooks.append({"hooks": [{"type": "command", "command": new_session_cmd}]})
+                added = True
+
+            if added:
+                installed.append(event)
+            else:
+                skipped.append(event)
+            continue
+
         if current_status.get(event):
             skipped.append(event)
             continue
 
         # Append to existing hook groups for this event
         hook_entry = {"type": "command", "command": command}
-
-        # SessionStart needs a matcher for compact events
-        if event == "SessionStart":
-            hook_group = {"matcher": "compact", "hooks": [hook_entry]}
-        else:
-            hook_group = {"hooks": [hook_entry]}
+        hook_group = {"hooks": [hook_entry]}
 
         if event not in hooks:
             hooks[event] = []
@@ -5125,7 +5144,6 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False):
 
     # Write cache atomically
     QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    import tempfile
     try:
         fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
         with os.fdopen(fd, "w") as f:
@@ -5459,11 +5477,15 @@ if __name__ == "__main__":
             if "--quiet" not in args:
                 print(f"[Token Optimizer] Checkpoint saved: {result}")
     elif args[0] == "compact-restore":
-        # Called by SessionStart hook
+        # Called by SessionStart hook (two variants)
         hook_input = _read_stdin_hook_input()
         sid = hook_input.get("session_id")
-        is_compact = hook_input.get("is_compact", False)
-        compact_restore(session_id=sid, is_compact=is_compact)
+        new_session_only = "--new-session-only" in args
+        if new_session_only:
+            compact_restore(session_id=sid, new_session_only=True)
+        else:
+            is_compact = hook_input.get("is_compact", False)
+            compact_restore(session_id=sid, is_compact=is_compact)
     elif args[0] == "compact-instructions":
         output_json = "--json" in args
         install = "--install" in args
