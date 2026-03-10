@@ -118,6 +118,24 @@ Add `permissions.deny` rules to `.claude/settings.json` (project-level) or `~/.c
 
 ---
 
+### 8. Cache Preservation (Reduce Compaction-Triggered Cache Rebuilds)
+**Target**: Fewer full cache rebuilds per session
+
+Every compaction event invalidates the prompt cache. Post-compaction, ALL context gets re-billed at full input price (not the 10% cached rate). In a heavy Opus session, a single cache rebuild can cost $2-5.
+
+**Strategies**:
+- [ ] Keep context lean (the optimizer's core job) to delay or prevent compaction
+- [ ] Enable Smart Compaction (`setup-smart-compact`) to preserve state across compaction events
+- [ ] For API users: Use Anthropic's Context Editing API (`clear_tool_uses_20250919` beta) to surgically evict old tool results WITHOUT triggering full compaction. This preserves the cache prefix.
+- [ ] For API users: Use thinking block clearing (`clear_thinking_20251015`) to free context space without compaction
+- [ ] Place strategic cache breakpoints before editable content (API users)
+
+**Why it matters**: The LinkedIn poster's dashboard showed cache hit rates swinging from 88% to 17% after compaction. At $5/M tokens on Opus, that's the difference between $0.50/M and $5/M for the same context.
+
+**Expected savings**: 1-3 cache rebuilds avoided per long session = $2-15 in API costs
+
+---
+
 ## MODEL ROUTING STRATEGY (Highest-ROI Behavioral Change)
 
 Model routing is the single highest-ROI optimization for multi-agent workflows. It saves dollars (API users), rate limit quota (subscription users), and wall-clock time. One instruction in CLAUDE.md, 50-75% cost reduction on automation.

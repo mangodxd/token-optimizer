@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Token Optimizer - Claude Code Status Line
-// Shows: model | project | context bar used% | Q:score
+// Shows: model | project | context bar used% | Context Quality score | Compacts:N
 //
 // Install: python3 measure.py setup-quality-bar
 // The quality score is updated by a UserPromptSubmit hook every ~2 minutes.
@@ -40,8 +40,9 @@ process.stdin.on('end', () => {
       }
     }
 
-    // Context quality score from cache file
+    // Read quality cache for score, compactions, turns
     let qScore = '';
+    let sessionInfo = '';
     const qFile = path.join(os.homedir(), '.claude', 'token-optimizer', 'quality-cache.json');
     if (fs.existsSync(qFile)) {
       try {
@@ -58,11 +59,23 @@ process.stdin.on('end', () => {
             qScore = ` \x1b[2m|\x1b[0m \x1b[31mContext Quality ${s}%\x1b[0m`;
           }
         }
+
+        // Compaction count (amber 1-2, red 3+)
+        const c = q.compactions;
+        if (c != null) {
+          if (c === 0) {
+            sessionInfo = ` \x1b[2mCompacts:${c}\x1b[0m`;
+          } else if (c <= 2) {
+            sessionInfo = ` \x1b[33mCompacts:${c}\x1b[0m`;
+          } else {
+            sessionInfo = ` \x1b[31mCompacts:${c}\x1b[0m`;
+          }
+        }
       } catch (e) {}
     }
 
     const dirname = path.basename(dir);
-    process.stdout.write(`\x1b[2m${model}\x1b[0m \x1b[2m|\x1b[0m \x1b[2m${dirname}\x1b[0m${ctx}${qScore}`);
+    process.stdout.write(`\x1b[2m${model}\x1b[0m \x1b[2m|\x1b[0m \x1b[2m${dirname}\x1b[0m${ctx}${qScore}${sessionInfo}`);
   } catch (e) {
     // Silent fail - never break the status line
   }

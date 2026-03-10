@@ -4364,7 +4364,7 @@ def quality_analyzer(session_id=None, as_json=False):
         issues.append(f"  {dp['count']:3d} duplicate reminders ({tokens:,} tokens est.)  repeated system-reminder injections")
     if bd["compaction_depth"]["compactions"] > 0:
         cd = bd["compaction_depth"]
-        issues.append(f"  {cd['compactions']:3d} compaction(s)       (information loss)    each compaction drops nuance")
+        issues.append(f"  {cd['compactions']:3d} compaction(s)       (information loss)    each compaction drops nuance + rebuilds cache")
 
     if issues:
         print("  Issues found:")
@@ -4382,6 +4382,7 @@ def quality_analyzer(session_id=None, as_json=False):
 
     # Recommendation
     total_waste = bd["total_estimated_waste_tokens"]
+    compactions = bd["compaction_depth"]["compactions"]
     if total_waste > 0:
         print(f"  Recommendation:")
         print(f"    /compact would free ~{total_waste:,} tokens of low-value content")
@@ -4391,6 +4392,18 @@ def quality_analyzer(session_id=None, as_json=False):
             print(f"    Smart Compact checkpoint would preserve {result['decisions_found']} decision(s)")
     elif score >= 85:
         print(f"  Session is clean. No action needed.")
+
+    # Cache preservation tip when compactions detected
+    if compactions > 0:
+        print(f"  Cache impact:")
+        print(f"    {compactions} compaction(s) triggered full cache rebuilds this session.")
+        print(f"    Each rebuild re-bills all context at full input price (not cached 10% rate).")
+        if bd["bloated_results"]["count"] > 0:
+            print(f"    {bd['bloated_results']['count']} bloated tool results detected. For API users: Anthropic's")
+            print(f"    Context Editing API (clear_tool_uses) can evict stale results WITHOUT")
+            print(f"    triggering compaction, preserving your cache prefix.")
+        print(f"    To reduce compactions: keep context lean, use Smart Compaction to")
+        print(f"    preserve state when compaction does fire.")
     print()
 
     return result
@@ -5179,6 +5192,8 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False):
     result = compute_quality_score(quality_data)
     result["total_messages"] = len(quality_data["messages"])
     result["decisions_found"] = len(quality_data["decisions"])
+    result["compactions"] = quality_data["compactions"]
+    result["turns"] = len([m for m in quality_data["messages"] if m[1] == "user"])
     result["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     # Write cache atomically

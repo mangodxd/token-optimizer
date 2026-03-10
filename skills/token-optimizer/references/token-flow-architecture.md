@@ -595,9 +595,23 @@ See `optimization-checklist.md` items 23-30 for what each does and how the optim
 
 ---
 
+## Cache Economics and Compaction
+
+Prompt caching is the foundation of Claude Code's cost model. Cached reads cost 10% of full input price ($0.50/M vs $5/M on Opus). When compaction fires, the entire conversation is replaced with a summary, invalidating the cache prefix. Every token after compaction gets billed at full price until the new cache warms up.
+
+**The compaction tax**: A single compaction in a 100K-token Opus session can cost $0.45 in cache rebuild alone (90K tokens at $5/M instead of $0.50/M). Multiple compactions compound this.
+
+**Mitigation strategies** (see optimization-checklist.md item 8):
+1. **Delay compaction**: Keep context lean (the optimizer's core job). Fewer tokens = later compaction = fewer rebuilds.
+2. **Context Editing API** (API users): `clear_tool_uses_20250919` and `clear_thinking_20251015` surgically evict stale content without triggering full compaction. Cache prefix survives.
+3. **Smart Compaction**: PreCompact checkpoint + Compact Instructions + SessionStart restore minimizes wasted post-compaction turns (which compound the cost).
+4. **Strategic cache breakpoints**: Place `cache_control` breakpoints before editable content. The 20-block lookback window means partial invalidation, not total.
+
+---
+
 ## Further Reading
 
-- **Official Docs**: https://docs.anthropic.com (prompt caching, context windows)
+- **Official Docs**: https://docs.anthropic.com (prompt caching, context windows, context editing)
 - **Official Costs**: https://code.claude.com/docs/en/costs ($6/dev/day average, 7x agent multiplier, background overhead data)
 - **Tool Search**: Default since Jan 2026 (deferred tool loading, 85% MCP reduction)
 - **Piebald-AI/claude-code-system-prompts** (3.9K stars): Most comprehensive open-source tracking of Claude Code's actual prompt content. 110+ prompt strings tracked. Useful for verifying system prompt sizes and tool definition token counts.
