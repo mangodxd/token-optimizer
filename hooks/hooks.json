@@ -1,0 +1,79 @@
+{
+  "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'COMPACTION GUIDANCE: Preserve code changes, key decisions, and file paths. Discard intermediate attempts, explanations, and verbose tool output.'"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-capture --trigger auto --quiet"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-restore"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-restore --new-session-only"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-capture --trigger stop --quiet"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' collect --quiet && python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' dashboard --quiet"
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-capture --trigger end --quiet"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' quality-cache --warn --quiet"
+          }
+        ]
+      }
+    ]
+  }
+}

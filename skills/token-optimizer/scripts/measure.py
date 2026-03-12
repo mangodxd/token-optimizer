@@ -3797,26 +3797,48 @@ def _is_hook_installed(settings=None):
 
     Returns True if any SessionEnd hook command contains 'measure.py collect'.
     Recognizes both old (collect-only) and new (collect + dashboard) hook commands.
+    Also checks plugin cache hooks (auto-installed via marketplace plugin).
     """
+    # Check user settings.json
     if settings is None:
-        if not SETTINGS_PATH.exists():
-            return False
-        try:
-            with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
-                settings = json.load(f)
-        except (json.JSONDecodeError, PermissionError, OSError):
-            return False
+        if SETTINGS_PATH.exists():
+            try:
+                with open(SETTINGS_PATH, "r", encoding="utf-8") as f:
+                    settings = json.load(f)
+            except (json.JSONDecodeError, PermissionError, OSError):
+                settings = {}
+        else:
+            settings = {}
 
     hooks = settings.get("hooks", {})
     session_end = hooks.get("SessionEnd", [])
-    if not isinstance(session_end, list):
-        return False
-    for entry in session_end:
-        hook_list = entry.get("hooks", []) if isinstance(entry, dict) else []
-        for hook in hook_list:
-            cmd = hook.get("command", "") if isinstance(hook, dict) else ""
-            if "measure.py" in cmd and "collect" in cmd:
-                return True
+    if isinstance(session_end, list):
+        for entry in session_end:
+            hook_list = entry.get("hooks", []) if isinstance(entry, dict) else []
+            for hook in hook_list:
+                cmd = hook.get("command", "") if isinstance(hook, dict) else ""
+                if "measure.py" in cmd and "collect" in cmd:
+                    return True
+
+    # Check plugin cache hooks (marketplace plugin auto-install)
+    plugin_cache = CLAUDE_DIR / "plugins" / "cache"
+    if plugin_cache.exists():
+        import glob as globmod
+        for hooks_file in globmod.glob(str(plugin_cache / "*" / "token-optimizer" / "*" / "hooks" / "hooks.json")):
+            try:
+                with open(hooks_file, "r", encoding="utf-8") as f:
+                    plugin_hooks = json.load(f)
+                ph = plugin_hooks.get("hooks", {}).get("SessionEnd", [])
+                if isinstance(ph, list):
+                    for entry in ph:
+                        hook_list = entry.get("hooks", []) if isinstance(entry, dict) else []
+                        for hook in hook_list:
+                            cmd = hook.get("command", "") if isinstance(hook, dict) else ""
+                            if "measure.py" in cmd and "collect" in cmd:
+                                return True
+            except (json.JSONDecodeError, PermissionError, OSError):
+                continue
+
     return False
 
 
@@ -5331,20 +5353,37 @@ def _is_smart_compact_installed(settings=None):
     """Check which smart compact hooks are installed.
 
     Returns dict of event -> bool.
+    Checks both user settings.json and plugin cache hooks.
     """
     if settings is None:
         settings, _ = _read_settings_json()
 
-    hooks = settings.get("hooks", {})
-    status = {}
+    # Merge user hooks with plugin hooks for detection
+    all_hooks = dict(settings.get("hooks", {}))
 
+    # Also check plugin cache hooks (marketplace plugin auto-install)
+    plugin_cache = CLAUDE_DIR / "plugins" / "cache"
+    if plugin_cache.exists():
+        import glob as globmod
+        for hooks_file in globmod.glob(str(plugin_cache / "*" / "token-optimizer" / "*" / "hooks" / "hooks.json")):
+            try:
+                with open(hooks_file, "r", encoding="utf-8") as f:
+                    plugin_hooks = json.load(f).get("hooks", {})
+                for event, groups in plugin_hooks.items():
+                    if event not in all_hooks:
+                        all_hooks[event] = groups
+                    else:
+                        all_hooks[event] = all_hooks[event] + groups
+            except (json.JSONDecodeError, PermissionError, OSError):
+                continue
+
+    status = {}
     for event in ("PreCompact", "SessionStart", "Stop", "SessionEnd"):
         installed = False
-        event_hooks = hooks.get(event, [])
+        event_hooks = all_hooks.get(event, [])
         for hook_group in event_hooks:
             for hook in hook_group.get("hooks", []):
                 cmd = hook.get("command", "")
-                # Match specifically on measure.py commands, not arbitrary scripts
                 if "measure.py" in cmd and ("compact-capture" in cmd or "compact-restore" in cmd):
                     installed = True
                     break

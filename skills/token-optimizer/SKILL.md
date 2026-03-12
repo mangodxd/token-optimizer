@@ -76,8 +76,8 @@ mkdir -p "$COORD_PATH"/{audit,analysis,plan,verification}
 ```bash
 python3 $MEASURE_PY check-hook
 ```
-   - If exit 0: hook is already installed, skip entirely and proceed to Phase 1.
-   - If exit 1: explain and offer to install:
+   - If exit 0: hook is already installed (includes plugin auto-install), skip entirely and proceed to Phase 1.
+   - If exit 1 (manual/script install users only): explain and offer to install:
 
    ```
    [Token Optimizer] Want to track your token usage over time?
@@ -108,10 +108,10 @@ python3 $MEASURE_PY check-hook
 
 6. **Check persistent dashboard daemon** (macOS only, first-time setup, skips silently if already running):
 ```bash
-python3 $MEASURE_PY setup-daemon --dry-run
+nc -z 127.0.0.1 24842 2>/dev/null && echo "DAEMON_RUNNING" || echo "DAEMON_NOT_RUNNING"
 ```
-   - If port 24842 is already listening: skip entirely.
-   - If macOS and not installed: explain and offer to install:
+   - If DAEMON_RUNNING: skip entirely, it's already working.
+   - If macOS and DAEMON_NOT_RUNNING: explain and offer to install:
 
    ```
    [Token Optimizer] Want a bookmarkable dashboard URL?
@@ -141,12 +141,12 @@ python3 $MEASURE_PY setup-daemon --dry-run
 
    If not macOS, skip silently. The file:// URL and `--serve` flag still work on all platforms.
 
-7. **Check Smart Compaction hooks** (v2.0, first-time setup, skips silently if already installed):
+7. **Check Smart Compaction hooks** (v2.0, first-time setup, skips silently if already installed; plugin users get these automatically):
 ```bash
 python3 $MEASURE_PY setup-smart-compact --status
 ```
-   - If all 4 hooks installed: skip entirely.
-   - If partially or not installed: explain and offer to install:
+   - If all 4 hooks installed (includes plugin auto-install): skip entirely.
+   - If partially or not installed (manual/script install users only): explain and offer to install:
 
    ```
    [Token Optimizer] New in v2.0: Smart Compaction
@@ -264,14 +264,25 @@ This generates an interactive HTML dashboard and opens it in the default browser
 
 Tell the user: "Dashboard opened in your browser. Browse findings by category, check the optimizations you want, click Copy Prompt and paste back here. Or just tell me directly what to tackle."
 
-Also mention the persistent dashboard:
+Also mention the persistent dashboard. **Check if the daemon is actually running first**:
+```bash
+nc -z 127.0.0.1 24842 2>/dev/null && echo "DAEMON_RUNNING" || echo "DAEMON_NOT_RUNNING"
+```
+
+If DAEMON_RUNNING:
 ```
 Your persistent dashboard (auto-updated every session):
-  URL:    http://localhost:24842/          (if daemon installed)
+  URL:    http://localhost:24842/
   File:   ~/.claude/_backups/token-optimizer/dashboard.html
-  Remote: python3 $MEASURE_PY dashboard --serve
 ```
-If the daemon is not installed and the user is on macOS, suggest: `python3 $MEASURE_PY setup-daemon`
+
+If DAEMON_NOT_RUNNING:
+```
+Your persistent dashboard (auto-updated every session):
+  File:   ~/.claude/_backups/token-optimizer/dashboard.html
+```
+Then, only on macOS, suggest: "Want a bookmarkable URL instead? Run: `python3 $MEASURE_PY setup-daemon`"
+Do NOT mention `localhost:24842` if the daemon is not running. Users will try the URL and get a connection error.
 
 For headless/remote servers, the user can run `python3 $MEASURE_PY dashboard --coord-path $COORD_PATH --serve` separately in a terminal to serve over HTTP. Never use `--serve` from within the SKILL.md orchestrator (it blocks with `serve_forever`).
 
