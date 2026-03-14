@@ -62,6 +62,15 @@ process.stdin.on('end', () => {
       } else {
         ctx = `${SEP}\x1b[5;31m${bar} ${used}%${RESET}`;
       }
+
+      // Write live fill data for quality score to use (bridges statusline -> quality cache)
+      try {
+        fs.writeFileSync(path.join(cacheDir, 'live-fill.json'), JSON.stringify({
+          used_percentage: used,
+          timestamp: Date.now(),
+          session_id: sessionId || null
+        }));
+      } catch (e) {}
     }
 
     // Quality score + compaction info from quality cache

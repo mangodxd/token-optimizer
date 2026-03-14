@@ -5106,11 +5106,20 @@ def _parse_jsonl_for_quality(filepath):
                 # Detect compaction boundary markers
                 # Claude Code writes: type="system", subtype="compact_boundary",
                 # with compactMetadata dict containing trigger and preTokens
+                # On boundary: reset all signal accumulators so quality score
+                # reflects the CURRENT context window, not full session history
                 if rec_type == "system" and (
                     record.get("subtype") == "compact_boundary"
                     or "compactMetadata" in record
                 ):
                     compactions += 1
+                    reads = []
+                    writes = []
+                    tool_results = []
+                    system_reminders = []
+                    messages = []
+                    agent_dispatches = []
+                    decisions = []
                     idx += 1
                     continue
 
@@ -5313,15 +5322,26 @@ def compute_quality_score(quality_data):
     if total_messages == 0:
         return {"score": 0, "signals": {}, "breakdown": {}}
 
-    # 0. Context fill degradation (MRCR-based)
-    # Estimate fill from token counts in the session
+    # 0. Context fill degradation
+    # Priority: live fill from statusline sidecar > char-length estimate from JSONL
     ctx_window = detect_context_window()[0]
-    total_input = quality_data.get("total_input_tokens", 0)
-    if total_input > 0:
-        fill_pct = min(1.0, total_input / ctx_window)
-    else:
-        # Estimate from message count (rough: ~5K tokens per message exchange)
-        fill_pct = min(1.0, (total_messages * 5000) / ctx_window)
+    fill_pct = None
+    try:
+        live_fill_path = QUALITY_CACHE_DIR / "live-fill.json"
+        if live_fill_path.exists():
+            live = json.loads(live_fill_path.read_text(encoding="utf-8"))
+            age = time.time() - live.get("timestamp", 0) / 1000  # JS timestamp is ms
+            if age < 30:
+                fill_pct = live["used_percentage"] / 100.0
+    except (json.JSONDecodeError, OSError, KeyError):
+        pass
+    if fill_pct is None:
+        CHARS_PER_TOKEN = 4
+        total_chars = sum(tlen for _, _, tlen, _ in quality_data["messages"])
+        total_chars += sum(rsize for _, _, rsize, _ in quality_data["tool_results"])
+        total_chars += sum(ssize for _, _, ssize in quality_data["system_reminders"])
+        estimated_tokens = total_chars / CHARS_PER_TOKEN
+        fill_pct = min(1.0, estimated_tokens / ctx_window) if ctx_window > 0 else 0
     fill_quality = _estimate_quality_from_fill(fill_pct)
     # Scale to 0-100 score (76 at worst = 0, 98 at best = 100)
     fill_score = max(0, min(100, (fill_quality - 76) / (98 - 76) * 100))
@@ -5365,6 +5385,7 @@ def compute_quality_score(quality_data):
         density_ratio = substantive / total_messages
         density_score = min(100, density_ratio * 200)  # 50% substantive = 100
     else:
+        density_ratio = 0
         density_score = 50
 
     # 6. Agent efficiency: result tokens used vs dispatched
@@ -6445,13 +6466,14 @@ def _write_quality_cache(cache_path, result):
         return False
 
 
-def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None):
+def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None, force=False):
     """Run quality analysis and write score to cache file for status line.
 
-    Skips analysis if cache is younger than throttle_seconds.
+    Skips analysis if cache is younger than throttle_seconds (unless force=True).
     Args:
         session_jsonl: Path string to the session JSONL (from hook transcript_path).
                        If provided, used directly instead of guessing by mtime.
+        force: If True, bypass throttle (used by PostCompact hook for immediate refresh).
     Returns the quality score, or None if skipped/failed.
     """
     # Resolve the session file: prefer explicit path, fall back to mtime guess
@@ -6463,8 +6485,8 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
     # Per-session cache: each session has its own file to avoid cross-session pollution
     cache_path = _quality_cache_path_for(filepath)
 
-    # Throttle: skip if per-session cache is recent enough
-    if cache_path.exists():
+    # Throttle: skip if per-session cache is recent enough (unless force=True)
+    if not force and cache_path.exists():
         try:
             age = time.time() - cache_path.stat().st_mtime
             if age < throttle_seconds:
@@ -6882,6 +6904,7 @@ if __name__ == "__main__":
     elif args[0] == "quality-cache":
         quiet = "--quiet" in args or "-q" in args
         warn = "--warn" in args
+        force = "--force" in args
         throttle = 120
         warn_threshold = 70
         for i, a in enumerate(args):
@@ -6903,7 +6926,7 @@ if __name__ == "__main__":
                 session_jsonl = payload.get("transcript_path")
             except (json.JSONDecodeError, OSError):
                 pass
-        score = quality_cache(throttle_seconds=throttle, warn_threshold=warn_threshold, quiet=quiet, session_jsonl=session_jsonl)
+        score = quality_cache(throttle_seconds=throttle, warn_threshold=warn_threshold, quiet=quiet, session_jsonl=session_jsonl, force=force)
         if warn and score is not None and score < warn_threshold:
             if score < 50:
                 print(f"[Token Optimizer] Context quality: {score}/100 (critical). Heavy rot detected. Consider /clear with checkpoint.")
