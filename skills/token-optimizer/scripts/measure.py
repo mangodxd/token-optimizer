@@ -5103,16 +5103,24 @@ def _parse_jsonl_for_quality(filepath):
                 rec_type = record.get("type")
                 ts = record.get("timestamp", "")
 
-                # Detect compaction boundary markers
-                # Claude Code writes: type="system", subtype="compact_boundary",
-                # with compactMetadata dict containing trigger and preTokens
+                # Detect context-clearing boundaries:
+                # 1. compact_boundary (from /compact or autocompact)
+                # 2. ExitPlanMode (plan mode clears context but leaves no boundary marker)
                 # On boundary: reset all signal accumulators so quality score
                 # reflects the CURRENT context window, not full session history
-                if rec_type == "system" and (
+                is_compact = rec_type == "system" and (
                     record.get("subtype") == "compact_boundary"
                     or "compactMetadata" in record
-                ):
-                    compactions += 1
+                )
+                is_plan_exit = False
+                if rec_type == "assistant":
+                    for block in record.get("message", {}).get("content", []):
+                        if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "ExitPlanMode":
+                            is_plan_exit = True
+                            break
+                if is_compact or is_plan_exit:
+                    if is_compact:
+                        compactions += 1
                     reads = []
                     writes = []
                     tool_results = []
