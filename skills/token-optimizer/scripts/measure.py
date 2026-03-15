@@ -1250,6 +1250,7 @@ def doctor(as_json=False):
         try:
             import sqlite3
             conn = sqlite3.connect(str(TRENDS_DB))
+            conn.execute("PRAGMA busy_timeout=5000")
             count = conn.execute("SELECT COUNT(*) FROM session_log").fetchone()[0]
             conn.close()
             mtime = TRENDS_DB.stat().st_mtime
@@ -3760,6 +3761,7 @@ def conn_total_sessions():
     """Quick count of total sessions in the DB."""
     try:
         conn = sqlite3.connect(str(TRENDS_DB))
+        conn.execute("PRAGMA busy_timeout=5000")
         cur = conn.execute("SELECT COUNT(*) FROM session_log")
         count = cur.fetchone()[0]
         conn.close()
@@ -3779,6 +3781,7 @@ def _collect_trends_from_db(days=30):
 
     try:
         conn = sqlite3.connect(str(TRENDS_DB))
+        conn.execute("PRAGMA busy_timeout=5000")
         conn.row_factory = sqlite3.Row
         # Verify it's a valid DB before proceeding
         conn.execute("SELECT 1 FROM session_log LIMIT 1")
