@@ -68,7 +68,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' collect --quiet && python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' dashboard --quiet"
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' collect --quiet && python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' dashboard --quiet",
+            "async": true
           }
         ]
       },
@@ -76,7 +77,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-capture --trigger end --quiet"
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' compact-capture --trigger end --quiet",
+            "async": true
           }
         ]
       }

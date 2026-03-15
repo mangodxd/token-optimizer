@@ -42,6 +42,9 @@ process.stdin.on('end', () => {
       }
     } catch (e) {}
 
+    // Cache directory (declared early, used by live-fill write and quality score read)
+    const cacheDir = path.join(os.homedir(), '.claude', 'token-optimizer');
+
     // Context window bar with degradation-aware colors
     // Context fill bands: <50% = green, 50-70% = yellow, 70-80% = orange, 80%+ = red
     let ctx = '';
@@ -77,7 +80,6 @@ process.stdin.on('end', () => {
     // Priority: per-session cache (by session_id) > most recent per-session > global fallback
     let qScore = '';
     let sessionInfo = '';
-    const cacheDir = path.join(os.homedir(), '.claude', 'token-optimizer');
 
     let q = null;
     try {

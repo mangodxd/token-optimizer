@@ -3612,6 +3612,7 @@ def _init_trends_db():
     SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(TRENDS_DB))
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SCHEMA)
     # Migrate existing DBs: add slug/topic columns if missing
     try:
