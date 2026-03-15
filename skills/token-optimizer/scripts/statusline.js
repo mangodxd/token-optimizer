@@ -60,20 +60,20 @@ process.stdin.on('end', () => {
       const filled = Math.floor(clamped / 10);
       const bar = '\u2588'.repeat(filled) + '\u2591'.repeat(10 - filled);
 
-      if (used < 50) {
-        ctx = `${SEP}\x1b[32m${bar} ${used}%${RESET}`;
-      } else if (used < 70) {
-        ctx = `${SEP}\x1b[33m${bar} ${used}%${RESET}`;
-      } else if (used < 80) {
-        ctx = `${SEP}\x1b[38;5;208m${bar} ${used}%${RESET}`;
+      if (clamped < 50) {
+        ctx = `${SEP}\x1b[32m${bar} ${clamped}%${RESET}`;
+      } else if (clamped < 70) {
+        ctx = `${SEP}\x1b[33m${bar} ${clamped}%${RESET}`;
+      } else if (clamped < 80) {
+        ctx = `${SEP}\x1b[38;5;208m${bar} ${clamped}%${RESET}`;
       } else {
-        ctx = `${SEP}\x1b[5;31m${bar} ${used}%${RESET}`;
+        ctx = `${SEP}\x1b[5;31m${bar} ${clamped}%${RESET}`;
       }
 
       // Write live fill data for quality score to use (bridges statusline -> quality cache)
       try {
         const liveFillData = JSON.stringify({
-          used_percentage: used,
+          used_percentage: clamped,
           timestamp: Date.now(),
           session_id: sessionId || null
         });
