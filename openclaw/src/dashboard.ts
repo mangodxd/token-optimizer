@@ -8,8 +8,9 @@
 import * as fs from "fs";
 import * as path from "path";
 import { AgentRun, WasteFinding, AuditReport, totalTokens, Severity } from "./models";
-import { QualityReport, contextWindowForModel } from "./quality";
+import { QualityReport, contextWindowForModel, scoreSessionQuality } from "./quality";
 import { ContextAudit, SkillDetail, McpServer, ManageData } from "./context-audit";
+import { loadPricingTier, PRICING_TIER_LABELS } from "./pricing";
 
 // ---------------------------------------------------------------------------
 // Data interfaces
@@ -28,6 +29,8 @@ export interface DashboardData {
   quality: QualityReport | null;
   context: ContextAudit | null;
   sessions: SessionRow[];
+  pricingTier: string;
+  pricingTierLabel: string;
 }
 
 interface OverviewData {
@@ -77,6 +80,8 @@ interface SessionRow {
   duration: number;
   messages: number;
   outcome: string;
+  qualityScore: number;
+  qualityBand: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -203,17 +208,26 @@ export function buildDashboardData(
   // Build session rows (most recent first, cap at 200 for dashboard)
   // Sort newest first, then take 200 for the Sessions tab
   const sortedRuns = [...runs].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
-  const sessions: SessionRow[] = sortedRuns.slice(0, 200).map((r) => ({
-    date: r.timestamp.toISOString().slice(0, 10),
-    sessionId: r.sessionId.length > 12 ? r.sessionId.slice(0, 12) : r.sessionId,
-    agentName: r.agentName,
-    model: r.model,
-    tokens: totalTokens(r.tokens),
-    cost: r.costUsd,
-    duration: r.durationSeconds,
-    messages: r.messageCount,
-    outcome: r.outcome,
-  }));
+  const sessions: SessionRow[] = sortedRuns.slice(0, 200).map((r) => {
+    const sq = scoreSessionQuality(r);
+    return {
+      date: r.timestamp.toISOString().slice(0, 10),
+      sessionId: r.sessionId.length > 12 ? r.sessionId.slice(0, 12) : r.sessionId,
+      agentName: r.agentName,
+      model: r.model,
+      tokens: totalTokens(r.tokens),
+      cost: r.costUsd,
+      duration: r.durationSeconds,
+      messages: r.messageCount,
+      outcome: r.outcome,
+      qualityScore: sq.score,
+      qualityBand: sq.band,
+    };
+  });
+
+  // Pricing tier
+  const pricingTier = loadPricingTier();
+  const pricingTierLabel = PRICING_TIER_LABELS[pricingTier] ?? pricingTier;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -237,6 +251,8 @@ export function buildDashboardData(
     quality,
     context,
     sessions,
+    pricingTier,
+    pricingTierLabel,
   };
 }
 
@@ -852,10 +868,19 @@ function renderSessions(data: DashboardData): string {
                 <th>Cost</th>
                 <th>Duration</th>
                 <th>Outcome</th>
+                <th>Quality</th>
               </tr>
             </thead>
             <tbody>
-              ${rows.map((r) => `<tr>
+              ${rows.map((r) => {
+                const qBorderStyle = r.qualityScore >= 80
+                  ? "border-left:4px solid var(--c-success)"
+                  : r.qualityScore >= 60
+                  ? ""
+                  : r.qualityScore >= 40
+                  ? "border-left:4px solid var(--c-warning)"
+                  : "border-left:4px solid var(--c-danger)";
+                return `<tr style="${qBorderStyle}">
                 <td>${esc(r.agentName.length > 20 ? r.agentName.slice(0, 20) + "..." : r.agentName)}</td>
                 <td>${esc(r.model)}</td>
                 <td>${r.messages}</td>
@@ -863,7 +888,9 @@ function renderSessions(data: DashboardData): string {
                 <td style="color:var(--c-accent-cyan)">${fmtCost(r.cost)}</td>
                 <td>${fmtDuration(r.duration)}</td>
                 <td><span style="color:${outcomeColor(r.outcome)}">${esc(r.outcome)}</span></td>
-              </tr>`).join("")}
+                <td><span style="color:${qualityBand(r.qualityScore).color}">${r.qualityScore} ${esc(r.qualityBand)}</span></td>
+              </tr>`;
+              }).join("")}
             </tbody>
           </table>
         </div>

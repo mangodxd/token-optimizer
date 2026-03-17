@@ -46,6 +46,19 @@ export interface WasteFinding {
   evidence: Record<string, unknown>;
 }
 
+export interface TurnData {
+  turnIndex: number;
+  role: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheRead: number;
+  cacheCreation: number;
+  model: string;
+  timestamp: string | null;
+  toolsUsed: string[];
+  costUsd: number;
+}
+
 export interface AuditReport {
   scannedAt: Date;
   daysScanned: number;

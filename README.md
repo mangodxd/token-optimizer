@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-2.5.0-green" alt="Version 2.5.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-2.6.0-green" alt="Version 2.5.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-Plugin-brightgreen" alt="OpenClaw Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/alexgreensh/token-optimizer" alt="License"></a>
@@ -74,7 +74,27 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 ---
 
-### NEW in v2.4: Degradation Intelligence
+### NEW in v2.6: Per-Turn Analytics and Cost Intelligence
+
+| Feature | What You Get |
+|---------|-------------|
+| **Per-turn token breakdown** | Click any session to see input/output/cache per API call. Spike detection highlights context jumps. |
+| **Cost per session** | Every session shows estimated API cost. Daily totals in the trends view. |
+| **Four-tier pricing** | Anthropic API, Vertex Global, Vertex Regional (+10%), AWS Bedrock. Set once, all costs update. |
+| **Cache visualization** | Stacked bars showing input vs output vs cache-read vs cache-write split. See how well prompt caching works. |
+| **Session quality overlay** | Color-coded quality scores on every session. Green = healthy, yellow = degrading, red = trouble. |
+| **Kill stale sessions** | `measure.py kill-stale` terminates zombie headless sessions. Dashboard shows kill buttons with explanation. |
+
+```bash
+python3 measure.py conversation              # Per-turn breakdown (current session)
+python3 measure.py conversation <session-id>  # Per-turn breakdown (specific session)
+python3 measure.py pricing-tier               # View/set pricing tier
+python3 measure.py pricing-tier vertex-regional  # Switch to Vertex Regional pricing
+python3 measure.py kill-stale                 # Kill sessions running >12h
+python3 measure.py kill-stale --dry-run       # Preview without killing
+```
+
+### Commands
 
 | Command | What You Get |
 |---------|-------------|
@@ -83,6 +103,9 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 | `drift` | **"Has my setup grown?"** Side-by-side comparison vs your last snapshot. Catches config creep before it costs you. |
 | `quality` | **"How healthy is this session?"** 7-signal analysis of your live conversation. Stale reads, wasted tokens, compaction damage. |
 | `report` | **"Where are my tokens going?"** Full per-component breakdown. Every skill, every MCP server, every config file. |
+| `conversation` | **"What happened each turn?"** Per-message token + cost breakdown with spike detection. |
+| `pricing-tier` | **"What am I paying?"** View or switch between Anthropic/Vertex/Bedrock pricing tiers. |
+| `kill-stale` | **"Clean up zombies."** Terminate headless sessions running 12+ hours. |
 | `/token-optimizer` | **"Fix it for me."** Interactive audit with 6 parallel agents. Guided fixes with diffs and backups. |
 
 ### Quality Scoring (7 signals)

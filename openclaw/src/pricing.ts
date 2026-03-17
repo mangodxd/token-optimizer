@@ -2,6 +2,56 @@ import * as fs from "fs";
 import * as path from "path";
 import { TokenBreakdown } from "./models";
 
+// ---------------------------------------------------------------------------
+// Pricing tier types and constants
+// ---------------------------------------------------------------------------
+
+export type PricingTier = "anthropic" | "vertex-global" | "vertex-regional" | "bedrock";
+
+/** Pricing tier labels for display. */
+export const PRICING_TIER_LABELS: Record<PricingTier, string> = {
+  anthropic: "Anthropic API (direct)",
+  "vertex-global": "Google Vertex AI (global)",
+  "vertex-regional": "Google Vertex AI (regional, +10%)",
+  bedrock: "AWS Bedrock",
+};
+
+/**
+ * Get the cost multiplier for a pricing tier.
+ * Only vertex-regional charges differently (10% surcharge on Claude models).
+ * All other tiers use base Anthropic rates.
+ */
+export function tierMultiplier(tier: PricingTier, model: string): number {
+  if (tier !== "vertex-regional") return 1;
+  if (model === "opus" || model === "sonnet" || model === "haiku") return 1.1;
+  return 1;
+}
+
+const HOME_DIR = process.env.HOME ?? process.env.USERPROFILE ?? "";
+const TIER_CONFIG_DIR = path.join(HOME_DIR, ".openclaw", "token-optimizer");
+const TIER_CONFIG_PATH = path.join(TIER_CONFIG_DIR, "config.json");
+
+/** Load the user's selected pricing tier from config. Defaults to "anthropic". */
+export function loadPricingTier(openclawDir?: string): PricingTier {
+  const configPath = openclawDir
+    ? path.join(openclawDir, "token-optimizer", "config.json")
+    : TIER_CONFIG_PATH;
+
+  try {
+    if (!fs.existsSync(configPath)) return "anthropic";
+    const data = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    const tier = data?.pricingTier as string | undefined;
+    if (tier && tier in PRICING_TIER_LABELS) return tier as PricingTier;
+    return "anthropic";
+  } catch {
+    return "anthropic";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Model pricing
+// ---------------------------------------------------------------------------
+
 export interface ModelPricing {
   input: number;
   output: number;

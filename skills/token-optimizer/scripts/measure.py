@@ -26,6 +26,10 @@ Usage:
     python3 measure.py coach --focus skills # Focus on skill optimization
     python3 measure.py collect             # Collect sessions into SQLite DB
     python3 measure.py collect --quiet     # Silent mode (for SessionEnd hook)
+    python3 measure.py conversation [session-id] # Per-turn token breakdown
+    python3 measure.py conversation --json       # Machine-readable per-turn data
+    python3 measure.py pricing-tier              # Show/set pricing tier
+    python3 measure.py pricing-tier vertex-regional # Set to Vertex AI Regional
 
     Global flags:
     --context-size N                      # Override context window (e.g., 1000000)
@@ -71,6 +75,105 @@ TOKENS_PER_EAGER_TOOL = 150
 AVG_TOOLS_PER_SERVER = 10
 # Overhead per CLAUDE.md file injection (XML wrapper + headers + disclaimer)
 CLAUDE_MD_INJECTION_OVERHEAD = 75
+
+# ========== Pricing Tiers ==========
+# Per-MTok pricing for Claude models across providers.
+# Non-Claude models are unaffected by tier selection.
+
+PRICING_TIERS = {
+    "anthropic": {
+        "label": "Anthropic API",
+        "claude_models": {
+            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
+            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
+            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25},
+        },
+    },
+    "vertex-global": {
+        "label": "Vertex AI Global",
+        "claude_models": {
+            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
+            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
+            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25},
+        },
+    },
+    "vertex-regional": {
+        "label": "Vertex AI Regional",
+        "claude_models": {
+            "opus":   {"input": 5.5,  "output": 27.5, "cache_read": 0.55, "cache_write": 6.875},
+            "sonnet": {"input": 3.3,  "output": 16.5, "cache_read": 0.33, "cache_write": 4.125},
+            "haiku":  {"input": 1.1,  "output": 5.5,  "cache_read": 0.11, "cache_write": 1.375},
+        },
+    },
+    "bedrock": {
+        "label": "AWS Bedrock",
+        "claude_models": {
+            "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25},
+            "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75},
+            "haiku":  {"input": 1.0,  "output": 5.0,  "cache_read": 0.1,  "cache_write": 1.25},
+        },
+    },
+}
+
+CONFIG_DIR = CLAUDE_DIR / "token-optimizer"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+
+
+def _load_pricing_tier():
+    """Load pricing tier preference from config. Defaults to 'anthropic'."""
+    try:
+        if CONFIG_PATH.exists():
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+            tier = cfg.get("pricing_tier", "anthropic")
+            if tier in PRICING_TIERS:
+                return tier
+    except (json.JSONDecodeError, OSError):
+        pass
+    return "anthropic"
+
+
+def _save_pricing_tier(tier):
+    """Persist pricing tier preference to config."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    cfg = {}
+    try:
+        if CONFIG_PATH.exists():
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        pass
+    cfg["pricing_tier"] = tier
+    fd = os.open(str(CONFIG_PATH), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+
+
+def _get_model_cost(model, input_tokens, output_tokens, cache_read=0, cache_create=0, tier=None):
+    """Calculate USD cost for a given model and token counts using the active pricing tier.
+
+    Returns cost in USD. Non-Claude models use Anthropic API rates.
+    """
+    if tier is None:
+        tier = _load_pricing_tier()
+    tier_data = PRICING_TIERS.get(tier, PRICING_TIERS["anthropic"])
+
+    normalized = _normalize_model_name(model) if model else None
+    if normalized and normalized in tier_data["claude_models"]:
+        rates = tier_data["claude_models"][normalized]
+    else:
+        # Non-Claude model: use Anthropic tier rates for Claude, skip for others
+        rates = PRICING_TIERS["anthropic"]["claude_models"].get(normalized or "", None)
+        if rates is None:
+            return 0.0
+
+    cost = (
+        input_tokens * rates["input"] / 1e6
+        + output_tokens * rates["output"] / 1e6
+        + cache_read * rates["cache_read"] / 1e6
+        + cache_create * rates["cache_write"] / 1e6
+    )
+    return cost
 
 
 def _fmt_context_window(size):
@@ -2459,6 +2562,30 @@ def generate_standalone_dashboard(days=30, quiet=False):
         print("  Collecting management data...")
     management = _collect_management_data(components=components, trends=trends)
 
+    # Collect per-turn data for recent sessions (deep dive feature, v2.6)
+    # Cap at 30 sessions to keep dashboard file size reasonable
+    if not quiet:
+        print("  Collecting per-turn data for recent sessions...")
+    session_turns = {}
+    try:
+        if TRENDS_DB.exists():
+            turn_conn = sqlite3.connect(str(TRENDS_DB))
+            turn_conn.execute("PRAGMA busy_timeout=5000")
+            turn_rows = turn_conn.execute(
+                "SELECT jsonl_path, slug FROM session_log ORDER BY date DESC, collected_at DESC LIMIT 30"
+            ).fetchall()
+            for tr in turn_rows:
+                jpath = tr[0]
+                slug = tr[1] or Path(jpath).stem[:12]
+                if os.path.exists(jpath):
+                    turns = parse_session_turns(jpath)
+                    if turns:
+                        session_turns[slug] = turns
+            turn_conn.close()
+    except Exception:
+        pass
+
+    pricing_tier = _load_pricing_tier()
     data = {
         "snapshot": snapshot,
         "audit": {},
@@ -2472,6 +2599,10 @@ def generate_standalone_dashboard(days=30, quiet=False):
         "standalone": True,
         "auto_plan": True,
         "generated_at": datetime.now().isoformat(),
+        "pricing_tier": pricing_tier,
+        "pricing_tier_label": PRICING_TIERS.get(pricing_tier, {}).get("label", "Anthropic API"),
+        "pricing_tiers": {k: v["label"] for k, v in PRICING_TIERS.items()},
+        "session_turns": session_turns,
     }
 
     template = template_path.read_text(encoding="utf-8")
@@ -3497,6 +3628,8 @@ def _parse_session_jsonl(filepath):
         "duration_minutes": duration_minutes,
         "total_input_tokens": total_full_input,
         "total_output_tokens": total_output,
+        "total_cache_read": total_cache_read,
+        "total_cache_create": total_cache_create,
         "cache_hit_rate": cache_hit_rate,
         "model_usage": model_usage,
         "skills_used": skills_used,
@@ -3506,6 +3639,181 @@ def _parse_session_jsonl(filepath):
         "api_calls": api_calls,
         "first_ts": first_ts.isoformat() if first_ts else None,
     }
+
+
+def parse_session_turns(filepath):
+    """Parse a JSONL session file and return per-turn token data.
+
+    Returns a list of dicts, one per API call:
+      {turn_index, role, input_tokens, output_tokens, cache_read,
+       cache_creation, model, timestamp, tools_used, cost_usd}
+
+    Returns empty list if file is empty/unparseable.
+    """
+    turns = []
+    turn_index = 0
+    tier = _load_pricing_tier()
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                rec_type = record.get("type")
+                if rec_type != "assistant":
+                    continue
+
+                msg = record.get("message", {})
+                usage = msg.get("usage", {})
+                if not usage:
+                    continue
+
+                inp_tok = usage.get("input_tokens", 0)
+                out_tok = usage.get("output_tokens", 0)
+                cr = usage.get("cache_read_input_tokens", 0)
+                cc = usage.get("cache_creation_input_tokens", 0)
+                model = msg.get("model", "unknown")
+
+                # Extract tools used in this turn
+                tools = []
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            tools.append(block.get("name", ""))
+
+                ts_str = record.get("timestamp")
+                cost = _get_model_cost(model, inp_tok, out_tok, cr, cc, tier=tier)
+
+                turns.append({
+                    "turn_index": turn_index,
+                    "role": "assistant",
+                    "input_tokens": inp_tok,
+                    "output_tokens": out_tok,
+                    "cache_read": cr,
+                    "cache_creation": cc,
+                    "model": model,
+                    "timestamp": ts_str,
+                    "tools_used": tools,
+                    "cost_usd": round(cost, 6),
+                })
+                turn_index += 1
+
+    except (PermissionError, OSError):
+        pass
+
+    return turns
+
+
+def score_session_quality(session_data):
+    """Score a single session's quality on a 0-100 scale.
+
+    Uses a simplified version of the 5-signal quality score:
+    - Context fill at session end (25%)
+    - Message count risk (25%)
+    - Cache hit rate (20%)
+    - Output/input ratio (15%)
+    - Compaction events (15%)
+
+    session_data should include: total_input_tokens, total_output_tokens,
+    message_count, cache_hit_rate, api_calls, and optionally total_cache_read.
+    """
+    score = 0.0
+
+    # Signal 1: Context fill (25%)
+    # Lower fill = better (more room for work)
+    context_window = detect_context_window()[0]
+    total_input = session_data.get("total_input_tokens", 0)
+    fill_ratio = total_input / context_window if context_window > 0 else 0
+    if fill_ratio < 0.3:
+        fill_score = 100
+    elif fill_ratio < 0.5:
+        fill_score = 80
+    elif fill_ratio < 0.7:
+        fill_score = 55
+    elif fill_ratio < 0.85:
+        fill_score = 30
+    else:
+        fill_score = 10
+    score += fill_score * 0.25
+
+    # Signal 2: Message count risk (25%)
+    # More messages = higher risk of quality degradation
+    msg_count = session_data.get("message_count", 0)
+    if msg_count <= 20:
+        msg_score = 100
+    elif msg_count <= 40:
+        msg_score = 80
+    elif msg_count <= 60:
+        msg_score = 55
+    elif msg_count <= 100:
+        msg_score = 30
+    else:
+        msg_score = 10
+    score += msg_score * 0.25
+
+    # Signal 3: Cache hit rate (20%)
+    # Higher cache = better (reusing context efficiently)
+    chr_ = session_data.get("cache_hit_rate", 0)
+    if chr_ >= 0.8:
+        cache_score = 100
+    elif chr_ >= 0.6:
+        cache_score = 80
+    elif chr_ >= 0.4:
+        cache_score = 55
+    elif chr_ >= 0.2:
+        cache_score = 30
+    else:
+        cache_score = 10
+    score += cache_score * 0.20
+
+    # Signal 4: Output/input ratio (15%)
+    # Very low ratio = wasteful (loading lots of context, producing little)
+    total_output = session_data.get("total_output_tokens", 0)
+    if total_input > 0:
+        oi_ratio = total_output / total_input
+    else:
+        oi_ratio = 1.0
+    if oi_ratio >= 0.05:
+        oi_score = 100
+    elif oi_ratio >= 0.02:
+        oi_score = 70
+    elif oi_ratio >= 0.01:
+        oi_score = 40
+    else:
+        oi_score = 15
+    score += oi_score * 0.15
+
+    # Signal 5: API calls vs messages (15%)
+    # Healthy: roughly 1 API call per 2 messages
+    api_calls = session_data.get("api_calls", 0)
+    if msg_count > 0 and api_calls > 0:
+        calls_per_msg = api_calls / msg_count
+        if calls_per_msg <= 0.6:
+            api_score = 100
+        elif calls_per_msg <= 0.8:
+            api_score = 75
+        else:
+            api_score = 50
+    else:
+        api_score = 50
+    score += api_score * 0.15
+
+    final = int(round(min(100, max(0, score))))
+
+    if final >= 80:
+        band = "Good"
+    elif final >= 60:
+        band = "Fair"
+    elif final >= 40:
+        band = "Needs Work"
+    else:
+        band = "Poor"
+
+    return {"score": final, "band": band}
 
 
 def _normalize_model_name(model_id):
@@ -3886,11 +4194,12 @@ def _query_trends_db(conn, days):
     current_total = calculate_totals(components).get("estimated_total", 0)
 
     # Daily breakdown from session_log
+    pricing_tier = _load_pricing_tier()
     daily = {}
     session_rows = conn.execute(
         """SELECT date, duration_minutes, input_tokens, output_tokens,
                   message_count, api_calls, cache_hit_rate, skills_json,
-                  subagents_json, slug, topic, project
+                  subagents_json, model_usage_json, slug, topic, project
            FROM session_log WHERE date >= ? ORDER BY date DESC""",
         (cutoff,),
     ).fetchall()
@@ -3922,23 +4231,51 @@ def _query_trends_db(conn, days):
         except (json.JSONDecodeError, TypeError):
             subagents = {}
 
-        d["session_details"].append({
+        # Estimate cost from stored data
+        inp_total = sr["input_tokens"] or 0
+        out_total = sr["output_tokens"] or 0
+        chr_val = sr["cache_hit_rate"] or 0
+        cache_read_est = int(inp_total * chr_val)
+        uncached_est = inp_total - cache_read_est
+
+        # Determine dominant model from model_usage_json
+        try:
+            mu_raw = sr["model_usage_json"]
+            mu = json.loads(mu_raw) if mu_raw else {}
+        except (json.JSONDecodeError, TypeError, KeyError):
+            mu = {}
+        dom_model = max(mu, key=mu.get) if mu else "unknown"
+
+        session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, 0, tier=pricing_tier)
+
+        sd = {
             "duration_minutes": round(sr["duration_minutes"] or 0, 1),
-            "input_tokens": sr["input_tokens"] or 0,
-            "output_tokens": sr["output_tokens"] or 0,
+            "input_tokens": inp_total,
+            "output_tokens": out_total,
             "message_count": sr["message_count"] or 0,
             "api_calls": sr["api_calls"] or 0,
             "skills": list(skills.keys()),
             "subagents": list(subagents.keys()),
-            "cache_hit_rate": round(sr["cache_hit_rate"] or 0, 3),
+            "cache_hit_rate": round(chr_val, 3),
             "slug": sr["slug"],
             "topic": sr["topic"],
             "project": _clean_project_name(sr["project"]),
-        })
+            "cost_usd": round(session_cost, 4),
+            "model": _normalize_model_name(dom_model) or dom_model,
+        }
+        # Add quality score per session
+        sq = score_session_quality(sd)
+        sd["quality_score"] = sq["score"]
+        sd["quality_band"] = sq["band"]
+        d["session_details"].append(sd)
 
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
 
     conn.close()
+
+    # Pricing tier info for dashboard
+    pricing_tier = _load_pricing_tier()
+    tier_label = PRICING_TIERS.get(pricing_tier, {}).get("label", "Anthropic API")
 
     return {
         "period_days": days,
@@ -3960,6 +4297,8 @@ def _query_trends_db(conn, days):
             "current_total": current_total,
         },
         "daily": daily_sorted,
+        "pricing_tier": pricing_tier,
+        "pricing_tier_label": tier_label,
         "source": "sqlite",
     }
 
@@ -4044,6 +4383,7 @@ def _collect_trends_from_jsonl(days=30):
     current_total = calculate_totals(components).get("estimated_total", 0)
 
     # Build daily breakdown
+    pricing_tier = _load_pricing_tier()
     daily = {}
     for s in sessions:
         date = s["date"]
@@ -4062,7 +4402,15 @@ def _collect_trends_from_jsonl(days=30):
         d["total_output"] += s["total_output_tokens"]
         for skill in s["skills_used"]:
             d["skills_used"][skill] = d["skills_used"].get(skill, 0) + s["skills_used"][skill]
-        d["session_details"].append({
+        # Determine dominant model and compute cost
+        dom_model = max(s["model_usage"], key=s["model_usage"].get) if s["model_usage"] else "unknown"
+        cr = s.get("total_cache_read", 0)
+        cc = s.get("total_cache_create", 0)
+        # uncached input = total - cache_read - cache_create
+        uncached = max(0, s["total_input_tokens"] - cr - cc)
+        session_cost = _get_model_cost(dom_model, uncached, s["total_output_tokens"], cr, cc, tier=pricing_tier)
+
+        sd = {
             "duration_minutes": round(s["duration_minutes"], 1),
             "input_tokens": s["total_input_tokens"],
             "output_tokens": s["total_output_tokens"],
@@ -4074,10 +4422,22 @@ def _collect_trends_from_jsonl(days=30):
             "slug": s.get("slug"),
             "topic": s.get("topic"),
             "project": _clean_project_name(s.get("project")),
-        })
+            "cache_read_tokens": cr,
+            "cache_create_tokens": cc,
+            "cost_usd": round(session_cost, 4),
+            "model": _normalize_model_name(dom_model) or dom_model,
+        }
+        sq = score_session_quality(sd)
+        sd["quality_score"] = sq["score"]
+        sd["quality_band"] = sq["band"]
+        d["session_details"].append(sd)
 
     # Sort daily by date descending
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
+
+    # Pricing tier info for dashboard
+    pricing_tier = _load_pricing_tier()
+    tier_label = PRICING_TIERS.get(pricing_tier, {}).get("label", "Anthropic API")
 
     return {
         "period_days": days,
@@ -4099,6 +4459,8 @@ def _collect_trends_from_jsonl(days=30):
             "current_total": current_total,
         },
         "daily": daily_sorted,
+        "pricing_tier": pricing_tier,
+        "pricing_tier_label": tier_label,
     }
 
 
@@ -4558,6 +4920,60 @@ def session_health():
             print(f"  {proc}")
 
     print()
+
+
+def kill_stale_sessions(threshold_hours=12, dry_run=False):
+    """Kill Claude Code sessions that have been running longer than threshold_hours.
+
+    Targets headless/zombie sessions that are no longer doing useful work.
+    Skips the current process's own PID to avoid self-termination.
+    """
+    import signal
+
+    health = _collect_health_data()
+    if health is None:
+        print("\n  Session health check is not supported on this platform.")
+        return
+
+    running = health["running_sessions"]
+    threshold_seconds = threshold_hours * 3600
+    my_pid = os.getpid()
+    my_ppid = os.getppid()
+
+    stale = [s for s in running
+             if s["elapsed_seconds"] > threshold_seconds
+             and s["pid"] != my_pid
+             and s["pid"] != my_ppid]
+
+    if not stale:
+        print(f"\n  No stale sessions found (threshold: {threshold_hours}h).")
+        print(f"  {len(running)} active session{'s' if len(running) != 1 else ''}, all within threshold.")
+        return
+
+    print(f"\n  Found {len(stale)} stale session{'s' if len(stale) != 1 else ''} (running >{threshold_hours}h):\n")
+    for s in stale:
+        flags = " ".join(s.get("flags", []))
+        print(f"    PID {s['pid']:<7d}  {s['elapsed_human']:>10s}  v{s.get('version') or '?':<10s}  {flags}")
+
+    if dry_run:
+        print(f"\n  Dry run. Would kill {len(stale)} process{'es' if len(stale) != 1 else ''}.")
+        print(f"  Run without --dry-run to terminate them.\n")
+        return
+
+    killed = 0
+    for s in stale:
+        try:
+            os.kill(s["pid"], signal.SIGTERM)
+            killed += 1
+        except ProcessLookupError:
+            print(f"    PID {s['pid']} already gone.")
+        except PermissionError:
+            print(f"    PID {s['pid']} permission denied (owned by another user).")
+
+    print(f"\n  Terminated {killed} stale session{'s' if killed != 1 else ''}.")
+    if killed > 0:
+        print(f"  These were headless/zombie Claude Code processes running >{threshold_hours}h.")
+        print(f"  Your active terminal sessions are unaffected.\n")
 
 
 # ========== Hook Management ==========
@@ -6821,6 +7237,71 @@ if __name__ == "__main__":
         out = generate_dashboard(cp)
         if serve:
             _serve_dashboard(out, port=serve_port, host=serve_host)
+    elif args[0] == "conversation":
+        # Per-turn token breakdown for a session
+        output_json = "--json" in args
+        sid = None
+        for a in args[1:]:
+            if a.startswith("--"):
+                continue
+            sid = a
+            break
+        if not sid:
+            # Use current session
+            fp = _find_current_session_jsonl()
+            if not fp:
+                print("[Error] No session ID provided and no active session found.")
+                sys.exit(1)
+        else:
+            # Find session by ID
+            fp = None
+            projects_dir = CLAUDE_DIR / "projects"
+            if projects_dir.exists():
+                for pd in projects_dir.iterdir():
+                    if not pd.is_dir():
+                        continue
+                    candidate = pd / f"{sid}.jsonl"
+                    if candidate.exists():
+                        fp = str(candidate)
+                        break
+            if not fp:
+                print(f"[Error] Session '{sid}' not found.")
+                sys.exit(1)
+        turns = parse_session_turns(fp)
+        if output_json:
+            print(json.dumps(turns, indent=2))
+        else:
+            tier = _load_pricing_tier()
+            tier_label = PRICING_TIERS[tier]["label"]
+            print(f"\n  Per-Turn Token Breakdown ({len(turns)} API calls)")
+            print(f"  Pricing: {tier_label}")
+            print(f"  {'#':>3}  {'Input':>8}  {'Output':>8}  {'Cache R':>8}  {'Cache W':>8}  {'Cost':>8}  Model")
+            print(f"  {'':->3}  {'':->8}  {'':->8}  {'':->8}  {'':->8}  {'':->8}  {'':->10}")
+            total_cost = 0
+            for t in turns:
+                cost_str = f"${t['cost_usd']:.4f}" if t['cost_usd'] > 0 else "$0"
+                total_cost += t['cost_usd']
+                model_short = _normalize_model_name(t['model']) or t['model'][:12]
+                tools_str = f"  [{', '.join(t['tools_used'][:3])}]" if t['tools_used'] else ""
+                print(f"  {t['turn_index']:>3}  {t['input_tokens']:>8,}  {t['output_tokens']:>8,}  {t['cache_read']:>8,}  {t['cache_creation']:>8,}  {cost_str:>8}  {model_short}{tools_str}")
+            print(f"\n  Total cost: ${total_cost:.4f}")
+            print()
+    elif args[0] == "pricing-tier":
+        if len(args) > 1 and args[1] in PRICING_TIERS:
+            _save_pricing_tier(args[1])
+            print(f"[Token Optimizer] Pricing tier set to: {PRICING_TIERS[args[1]]['label']}")
+        elif len(args) > 1:
+            print(f"[Error] Unknown tier '{args[1]}'. Available: {', '.join(PRICING_TIERS.keys())}")
+            sys.exit(1)
+        else:
+            current = _load_pricing_tier()
+            print(f"\n  Current pricing tier: {PRICING_TIERS[current]['label']}")
+            print(f"\n  Available tiers:")
+            for key, val in PRICING_TIERS.items():
+                marker = " (active)" if key == current else ""
+                print(f"    {key:20s} {val['label']}{marker}")
+            print(f"\n  Set with: measure.py pricing-tier <tier-name>")
+            print()
     elif args[0] == "collect":
         days = 90
         quiet = "--quiet" in args or "-q" in args
@@ -6833,6 +7314,19 @@ if __name__ == "__main__":
         collect_sessions(days=days, quiet=quiet)
     elif args[0] == "health":
         session_health()
+    elif args[0] == "kill-stale":
+        dry = "--dry-run" in args
+        hours = 12
+        for i, a in enumerate(args):
+            if a == "--hours" and i + 1 < len(args):
+                try:
+                    hours = int(args[i + 1])
+                except ValueError:
+                    pass
+        if hours < 1:
+            print("[Error] --hours must be >= 1")
+            sys.exit(1)
+        kill_stale_sessions(threshold_hours=hours, dry_run=dry)
     elif args[0] == "check-hook":
         check_hook()
     elif args[0] == "setup-hook":

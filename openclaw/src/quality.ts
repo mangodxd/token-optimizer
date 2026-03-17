@@ -356,3 +356,81 @@ export function scoreQuality(
 
   return { score, band, signals, recommendations };
 }
+
+// ---------------------------------------------------------------------------
+// Per-session quality scoring
+// ---------------------------------------------------------------------------
+
+/**
+ * Score a single AgentRun's quality on a 0-100 scale.
+ *
+ * Signals (weights):
+ *   1. Context fill (25%): input tokens / model context window
+ *   2. Message count risk (25%): >50 messages = degraded
+ *   3. Cache hit rate (20%): higher = better (OpenClaw: typically 0)
+ *   4. Output/input ratio (15%): low ratio = wasteful
+ *   5. Duration risk (15%): >60min sessions = risk
+ */
+export function scoreSessionQuality(run: AgentRun): { score: number; band: string } {
+  // Signal 1: Context fill (25%) - lower fill = better
+  const ctxWindow = contextWindowForModel(run.model);
+  const fillRatio = ctxWindow > 0 ? run.tokens.input / ctxWindow : 0;
+  let fillScore: number;
+  if (fillRatio < 0.2) fillScore = 100;
+  else if (fillRatio < 0.4) fillScore = 80;
+  else if (fillRatio < 0.6) fillScore = 60;
+  else if (fillRatio < 0.8) fillScore = 30;
+  else fillScore = 10;
+
+  // Signal 2: Message count risk (25%) - >50 = degraded
+  let msgScore: number;
+  if (run.messageCount <= 20) msgScore = 100;
+  else if (run.messageCount <= 35) msgScore = 80;
+  else if (run.messageCount <= 50) msgScore = 60;
+  else if (run.messageCount <= 80) msgScore = 30;
+  else msgScore = 10;
+
+  // Signal 3: Cache hit rate (20%)
+  const totalTok = totalTokens(run.tokens);
+  const cacheHitRate = totalTok > 0
+    ? run.tokens.cacheRead / totalTok
+    : 0;
+  let cacheScore: number;
+  if (cacheHitRate > 0.5) cacheScore = 100;
+  else if (cacheHitRate > 0.3) cacheScore = 80;
+  else if (cacheHitRate > 0.1) cacheScore = 60;
+  else if (cacheHitRate > 0) cacheScore = 40;
+  else cacheScore = 20; // No cache data (OpenClaw default)
+
+  // Signal 4: Output/input ratio (15%) - low ratio = wasteful
+  const outInRatio = run.tokens.input > 0
+    ? run.tokens.output / run.tokens.input
+    : 0;
+  let ratioScore: number;
+  if (outInRatio > 0.3) ratioScore = 100;
+  else if (outInRatio > 0.15) ratioScore = 80;
+  else if (outInRatio > 0.05) ratioScore = 60;
+  else if (outInRatio > 0.01) ratioScore = 30;
+  else ratioScore = 10;
+
+  // Signal 5: Duration risk (15%) - >60min = risk
+  const durationMin = run.durationSeconds / 60;
+  let durationScore: number;
+  if (durationMin <= 15) durationScore = 100;
+  else if (durationMin <= 30) durationScore = 80;
+  else if (durationMin <= 60) durationScore = 60;
+  else if (durationMin <= 120) durationScore = 30;
+  else durationScore = 10;
+
+  const weighted =
+    fillScore * 0.25 +
+    msgScore * 0.25 +
+    cacheScore * 0.20 +
+    ratioScore * 0.15 +
+    durationScore * 0.15;
+
+  const score = Math.round(Math.min(100, Math.max(0, weighted)));
+  const band = bandFromScore(score);
+
+  return { score, band };
+}
