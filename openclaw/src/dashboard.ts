@@ -18,6 +18,7 @@ import { ContextAudit, SkillDetail, McpServer, ManageData } from "./context-audi
 export interface DashboardData {
   generatedAt: string;
   daysScanned: number;
+  contextWindow: number;
   overview: OverviewData;
   agents: AgentSummary[];
   waste: WasteFinding[];
@@ -171,11 +172,30 @@ export function buildDashboardData(
 ): DashboardData {
   const allCostZero = runs.every((r) => r.costUsd === 0);
   const unknownModelRuns = runs.filter(
-    (r) => r.model === "unknown" || r.costUsd === 0
+    (r) => r.model === "unknown"
   ).length;
   const activeDays = new Set(
     runs.map((r) => r.timestamp.toISOString().slice(0, 10))
   ).size;
+
+  // Determine dominant model's context window
+  const modelCounts = new Map<string, number>();
+  for (const r of runs) {
+    modelCounts.set(r.model, (modelCounts.get(r.model) ?? 0) + 1);
+  }
+  let dominantModel = "sonnet";
+  let maxCount = 0;
+  for (const [model, count] of modelCounts) {
+    if (count > maxCount) { maxCount = count; dominantModel = model; }
+  }
+  // Import context window lookup from quality.ts would create circular dep,
+  // so inline the common ones
+  const WINDOW_MAP: Record<string, number> = {
+    opus: 1_000_000, sonnet: 1_000_000, haiku: 200_000,
+    "gpt-5.4": 1_100_000, "gpt-5.2": 400_000, "gpt-5": 400_000,
+    "gpt-4.1": 1_000_000, "gpt-4o": 128_000, "gemini-2.5-pro": 2_000_000,
+  };
+  const contextWindow = WINDOW_MAP[dominantModel] ?? 200_000;
 
   const severityCounts: Record<Severity, number> = {
     critical: 0,
@@ -188,7 +208,9 @@ export function buildDashboardData(
   }
 
   // Build session rows (most recent first, cap at 200 for dashboard)
-  const sessions: SessionRow[] = runs.slice(0, 200).map((r) => ({
+  // Sort newest first, then take 200 for the Sessions tab
+  const sortedRuns = [...runs].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+  const sessions: SessionRow[] = sortedRuns.slice(0, 200).map((r) => ({
     date: r.timestamp.toISOString().slice(0, 10),
     sessionId: r.sessionId.length > 12 ? r.sessionId.slice(0, 12) : r.sessionId,
     agentName: r.agentName,
@@ -203,6 +225,7 @@ export function buildDashboardData(
   return {
     generatedAt: new Date().toISOString(),
     daysScanned: report.daysScanned,
+    contextWindow,
     overview: {
       totalRuns: runs.length,
       totalCost: report.totalCostUsd,
@@ -374,7 +397,7 @@ function renderOverview(data: DashboardData): string {
       </div>
     </div>
 
-    ${data.context ? renderContextOverviewBar(data.context) : ""}
+    ${data.context ? renderContextOverviewBar(data.context, data) : ""}
 
     ${data.agents.length > 0 ? renderAgentCards(data.agents.slice(0, 6)) : ""}
 
@@ -387,17 +410,17 @@ function renderOverview(data: DashboardData): string {
   </div>`;
 }
 
-function renderContextOverviewBar(ctx: ContextAudit): string {
+function renderContextOverviewBar(ctx: ContextAudit, data: DashboardData): string {
   const total = ctx.totalOverhead;
   if (total === 0) return "";
 
   const comps = ctx.components.slice(0, 5);
-  const CONTEXT_WINDOW = 200_000; // Scale bars against context window, not against each other
+  const ctxW = data.contextWindow;
 
   return `<div class="card">
-    <div class="card-header"><span>Context Overhead</span><span style="color:var(--c-text-dim);font-family:var(--font-mono);font-size:13px">${fmtTokens(total)} of ${fmtTokens(CONTEXT_WINDOW)} (${((total / CONTEXT_WINDOW) * 100).toFixed(1)}%)</span></div>
+    <div class="card-header"><span>Context Overhead</span><span style="color:var(--c-text-dim);font-family:var(--font-mono);font-size:13px">${fmtTokens(total)} of ${fmtTokens(ctxW)} (${((total / ctxW) * 100).toFixed(1)}%)</span></div>
     ${comps.map((c) => {
-      const barW = logBarPct(c.tokens, CONTEXT_WINDOW);
+      const barW = logBarPct(c.tokens, ctxW);
       return `<div class="bar-row">
         <span class="bar-row-label">${esc(c.name)}</span>
         <div class="bar-row-track"><div class="bar-row-fill" style="width:${barW}%"></div></div>
@@ -434,23 +457,23 @@ function renderContext(data: DashboardData): string {
     </div>`;
   }
 
-  const CONTEXT_WINDOW = 200_000;
+  const ctxW = data.contextWindow;
   const activeSkills = ctx.skills.filter((s) => !s.isArchived);
   const activeMcp = ctx.mcpServers.filter((s) => !s.isDisabled);
-  const overheadPct = ((ctx.totalOverhead / CONTEXT_WINDOW) * 100).toFixed(1);
+  const overheadPct = ((ctx.totalOverhead / ctxW) * 100).toFixed(1);
 
   return `<div class="view" id="view-context">
     <div class="section-header">
       <div class="label">Context Analysis</div>
       <h1>Context</h1>
-      <p>Per-component token overhead injected into every API call. Bars show % of ${fmtTokens(CONTEXT_WINDOW)} context window.</p>
+      <p>Per-component token overhead injected into every API call. Bars show % of ${fmtTokens(ctxW)} context window.</p>
     </div>
 
     <div class="stat-row">
       <div class="stat-card">
         <div class="stat-card-value">${overheadPct}%</div>
         <div class="stat-card-label">Context Used</div>
-        <div class="stat-card-qualifier">${fmtTokens(ctx.totalOverhead)} of ${fmtTokens(CONTEXT_WINDOW)}</div>
+        <div class="stat-card-qualifier">${fmtTokens(ctx.totalOverhead)} of ${fmtTokens(ctxW)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-value">${activeSkills.length}</div>
@@ -470,8 +493,8 @@ function renderContext(data: DashboardData): string {
     <div class="card">
       <div class="card-header"><span>Token Breakdown by Component</span><span class="label">% of context window</span></div>
       ${ctx.components.map((c) => {
-        const barW = logBarPct(c.tokens, CONTEXT_WINDOW);
-        const pctOfWindow = ((c.tokens / CONTEXT_WINDOW) * 100).toFixed(1);
+        const barW = logBarPct(c.tokens, ctxW);
+        const pctOfWindow = ((c.tokens / ctxW) * 100).toFixed(1);
         return `<div class="bar-row">
           <span class="bar-row-label">${esc(c.name)}</span>
           <div class="bar-row-track"><div class="bar-row-fill" style="width:${barW}%"></div></div>
@@ -484,7 +507,7 @@ function renderContext(data: DashboardData): string {
       <div class="card">
         <div class="card-header"><span>Skills (${activeSkills.length} active)</span><span class="label">${fmtTokens(activeSkills.reduce((s, sk) => s + sk.tokens, 0))} total</span></div>
         ${activeSkills.map((sk) => {
-          const barW = logBarPct(sk.tokens, CONTEXT_WINDOW);
+          const barW = logBarPct(sk.tokens, ctxW);
           return `<div class="bar-row">
             <span class="bar-row-label" title="${esc(sk.description)}">${esc(sk.name)}</span>
             <div class="bar-row-track"><div class="bar-row-fill" style="width:${barW}%"></div></div>
@@ -1903,13 +1926,9 @@ function renderJS(): string {
       var cmd = this.getAttribute('data-manage-cmd');
       var name = this.getAttribute('data-manage-name') || cmd;
       if (!cmd) return;
-      if (this.checked) {
-        // Toggled ON = restore/enable, remove from pending if it was there
-        delete pendingChanges[name];
-      } else {
-        // Toggled OFF = archive/disable, add to pending
-        pendingChanges[name] = cmd;
-      }
+      // Every toggle adds its command (archive OR restore, baked into data-manage-cmd).
+      // Toggling the same item again replaces the previous command.
+      pendingChanges[name] = cmd;
       updatePendingBar();
     });
   });
