@@ -27,7 +27,7 @@ function safeCheckpointPath(sessionId: string): string {
   if (!resolved.startsWith(path.resolve(CHECKPOINT_DIR) + path.sep)) {
     throw new Error("Path traversal detected");
   }
-  return filepath;
+  return resolved;
 }
 
 export function captureCheckpoint(

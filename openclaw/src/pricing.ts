@@ -121,6 +121,7 @@ export function getPricing(openclawDir?: string): Record<string, ModelPricing> {
   if (openclawDir) {
     const userPricing = loadUserPricing(openclawDir);
     for (const [key, rates] of Object.entries(userPricing)) {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
       merged[key] = rates;
     }
   }

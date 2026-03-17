@@ -374,6 +374,7 @@ export function classifyCronRuns(
       const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
       const crons = config.cron ?? config.heartbeat ?? {};
       for (const key of Object.keys(crons)) {
+        if (key === "__proto__" || key === "constructor" || key === "prototype") continue;
         cronAgents.add(key);
       }
     }

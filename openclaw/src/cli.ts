@@ -13,7 +13,7 @@ import { findOpenClawDir } from "./session-parser";
 import { auditContext } from "./context-audit";
 import { scoreQuality } from "./quality";
 import { captureSnapshot, detectDrift } from "./drift";
-import { exec } from "child_process";
+import { execFile } from "child_process";
 
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
 
@@ -203,7 +203,7 @@ function cmdDashboard(days: number): void {
   console.log(`Dashboard written to: ${filepath}`);
   // Open in default browser
   const opener = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  exec(`${opener} "${filepath}"`, () => { /* ignore errors */ });
+  execFile(opener, [filepath], () => { /* ignore errors */ });
 }
 
 function cmdContext(json: boolean): void {

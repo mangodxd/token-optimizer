@@ -251,6 +251,14 @@ export function buildDashboardData(
 // RL2: HTML generation
 // ---------------------------------------------------------------------------
 
+/** Shell-escape a string for safe inclusion in shell commands. */
+function shellEsc(s: string): string {
+  // Only allow safe characters in skill/server names for commands
+  if (/^[a-zA-Z0-9_.-]+$/.test(s)) return s;
+  // Otherwise single-quote and escape embedded single quotes
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
 /**
  * Log-scale bar width: makes small values visible while preserving order.
  * Maps [1, contextWindow] to [2%, 80%] on a log scale.
@@ -911,7 +919,7 @@ function renderManage(data: DashboardData): string {
         <div style="max-height:500px;overflow-y:auto">
           ${activeSkills.map((sk) => `<div class="manage-row">
             <label class="manage-toggle">
-              <input type="checkbox" checked data-manage-cmd="mv ~/.openclaw/skills/${esc(sk.name)} ~/.openclaw/skills/_archived/${esc(sk.name)}" data-manage-name="${esc(sk.name)}">
+              <input type="checkbox" checked data-manage-cmd="mv ~/.openclaw/skills/${esc(shellEsc(sk.name))} ~/.openclaw/skills/_archived/${esc(shellEsc(sk.name))}" data-manage-name="${esc(sk.name)}">
               <span class="manage-slider"></span>
             </label>
             <div class="manage-info">
@@ -930,7 +938,7 @@ function renderManage(data: DashboardData): string {
         <div style="max-height:400px;overflow-y:auto">
           ${archivedSkills.map((sk) => `<div class="manage-row" style="opacity:0.7">
             <label class="manage-toggle">
-              <input type="checkbox" data-manage-cmd="mv ~/.openclaw/skills/_archived/${esc(sk.name)} ~/.openclaw/skills/${esc(sk.name)}" data-manage-name="${esc(sk.name)}">
+              <input type="checkbox" data-manage-cmd="mv ~/.openclaw/skills/_archived/${esc(shellEsc(sk.name))} ~/.openclaw/skills/${esc(shellEsc(sk.name))}" data-manage-name="${esc(sk.name)}">
               <span class="manage-slider"></span>
             </label>
             <div class="manage-info">
@@ -2012,7 +2020,7 @@ const DASHBOARD_PATH = path.join(DASHBOARD_DIR, "dashboard.html");
 export function writeDashboard(data: DashboardData): string {
   fs.mkdirSync(DASHBOARD_DIR, { recursive: true });
   const html = generateDashboardHtml(data);
-  fs.writeFileSync(DASHBOARD_PATH, html, "utf-8");
+  fs.writeFileSync(DASHBOARD_PATH, html, { encoding: "utf-8", mode: 0o600 });
   return DASHBOARD_PATH;
 }
 
