@@ -147,6 +147,16 @@ fi
 
 chmod +x "${INSTALL_DIR}/skills/token-optimizer/scripts/measure.py" 2>/dev/null || true
 
+# ── Setup Quality Bar (auto-install cache hook + status line) ─
+
+info "Setting up quality bar..."
+if python3 "${INSTALL_DIR}/skills/token-optimizer/scripts/measure.py" setup-quality-bar 2>/dev/null; then
+    info "Quality bar installed (status line + cache hook)"
+else
+    warn "Could not auto-install quality bar. Run manually in Claude Code:"
+    warn "  python3 measure.py setup-quality-bar"
+fi
+
 # ── Summary ───────────────────────────────────────────────────
 
 COMMIT=$(git -C "$INSTALL_DIR" rev-parse --short HEAD 2>/dev/null || echo "?")
@@ -157,6 +167,7 @@ echo ""
 echo "  Location:  ${INSTALL_DIR}"
 echo "  Commit:    ${COMMIT}"
 echo "  Skill:     /token-optimizer"
+echo "  Quality:   ContextQ score in status line (updates every ~2 min)"
 echo ""
 echo "  Measure current overhead:"
 echo "    python3 ${INSTALL_DIR}/skills/token-optimizer/scripts/measure.py report"
