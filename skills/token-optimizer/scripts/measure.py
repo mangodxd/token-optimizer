@@ -6964,6 +6964,36 @@ if __name__ == "__main__":
                     f.unlink()
             except OSError:
                 pass
+        # Auto-fix missing quality bar cache hook (fixes frozen ContextQ for existing users)
+        try:
+            if SETTINGS_PATH.exists():
+                settings = json.loads(SETTINGS_PATH.read_text())
+                has_statusline = bool(settings.get("statusLine"))
+                hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
+                has_cache_hook = any("quality-cache" in str(h) for h in hooks)
+                if has_statusline and not has_cache_hook:
+                    setup_quality_bar()
+        except Exception:
+            pass
+        # Auto-update check (once per day, script-installed users only)
+        try:
+            install_dir = Path.home() / ".claude" / "token-optimizer"
+            update_marker = install_dir / ".last-update-check"
+            if (install_dir / ".git").is_dir():
+                should_check = True
+                if update_marker.exists():
+                    age = time.time() - update_marker.stat().st_mtime
+                    should_check = age > 86400  # Once per day
+                if should_check:
+                    import subprocess
+                    subprocess.Popen(
+                        ["git", "-C", str(install_dir), "pull", "--ff-only"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        start_new_session=True
+                    )
+                    update_marker.touch()
+        except Exception:
+            pass
     elif args[0] == "setup-quality-bar":
         dry = "--dry-run" in args
         uninstall = "--uninstall" in args
