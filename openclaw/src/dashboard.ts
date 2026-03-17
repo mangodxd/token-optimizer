@@ -1782,8 +1782,8 @@ function renderJS(): string {
     ta.style.cssText = 'position:fixed;left:-9999px';
     document.body.appendChild(ta);
     ta.select();
-    try { document.execCommand('copy'); flashBtn(btn); }
-    catch(e) { btn.textContent = 'Failed'; setTimeout(function() { btn.textContent = 'Copy Fix'; }, 2000); }
+    try { document.execCommand('copy'); if (btn) flashBtn(btn); }
+    catch(e) { if (btn) { btn.textContent = 'Failed'; setTimeout(function() { btn.textContent = 'Copy Fix'; }, 2000); } }
     document.body.removeChild(ta);
   }
   document.querySelectorAll('.copy-fix-btn').forEach(function(btn) {
@@ -1800,20 +1800,21 @@ function renderJS(): string {
     });
   });
 
-  // Manage toggles: copy command on toggle
+  // Manage toggles: copy command on toggle, stay in new position
   document.querySelectorAll('.manage-toggle input').forEach(function(input) {
-    input.addEventListener('change', function(e) {
-      e.preventDefault();
+    input.addEventListener('change', function() {
       var cmd = this.getAttribute('data-manage-cmd');
-      var name = this.getAttribute('data-manage-name') || '';
       if (!cmd) return;
-      // Reset toggle visual (we don't actually change state, just copy)
-      var self = this;
-      setTimeout(function() { self.checked = !self.checked; }, 300);
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard.writeText(cmd).then(function() {
           showToast('Copied! Paste into your agent chat to apply.');
+        }).catch(function() {
+          fallbackCopy(cmd, null);
+          showToast('Copied! Paste into your agent chat to apply.');
         });
+      } else {
+        fallbackCopy(cmd, null);
+        showToast('Copied! Paste into your agent chat to apply.');
       }
     });
   });
