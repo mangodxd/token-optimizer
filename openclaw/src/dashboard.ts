@@ -381,12 +381,12 @@ function renderContextOverviewBar(ctx: ContextAudit): string {
   if (total === 0) return "";
 
   const comps = ctx.components.slice(0, 5);
-  const maxTokens = Math.max(...comps.map((c) => c.tokens));
+  const CONTEXT_WINDOW = 200_000; // Scale bars against context window, not against each other
 
   return `<div class="card">
-    <div class="card-header"><span>Context Overhead</span><span style="color:var(--c-text-dim);font-family:var(--font-mono);font-size:13px">${fmtTokens(total)} tokens/message</span></div>
+    <div class="card-header"><span>Context Overhead</span><span style="color:var(--c-text-dim);font-family:var(--font-mono);font-size:13px">${fmtTokens(total)} of ${fmtTokens(CONTEXT_WINDOW)} (${((total / CONTEXT_WINDOW) * 100).toFixed(1)}%)</span></div>
     ${comps.map((c) => {
-      const pct = maxTokens > 0 ? (c.tokens / maxTokens) * 100 : 0;
+      const pct = (c.tokens / CONTEXT_WINDOW) * 100;
       return `<div class="bar-row">
         <span class="bar-row-label">${esc(c.name)}</span>
         <div class="bar-row-track"><div class="bar-row-fill" style="width:${pct}%"></div></div>
@@ -423,23 +423,23 @@ function renderContext(data: DashboardData): string {
     </div>`;
   }
 
-  const maxTokens = Math.max(...ctx.components.map((c) => c.tokens), 1);
+  const CONTEXT_WINDOW = 200_000;
   const activeSkills = ctx.skills.filter((s) => !s.isArchived);
-  const maxSkillTokens = activeSkills.length > 0 ? Math.max(...activeSkills.map((s) => s.tokens), 1) : 1;
   const activeMcp = ctx.mcpServers.filter((s) => !s.isDisabled);
+  const overheadPct = ((ctx.totalOverhead / CONTEXT_WINDOW) * 100).toFixed(1);
 
   return `<div class="view" id="view-context">
     <div class="section-header">
       <div class="label">Context Analysis</div>
       <h1>Context</h1>
-      <p>Per-component token overhead injected into every API call.</p>
+      <p>Per-component token overhead injected into every API call. Bars show % of ${fmtTokens(CONTEXT_WINDOW)} context window.</p>
     </div>
 
     <div class="stat-row">
       <div class="stat-card">
-        <div class="stat-card-value">${fmtTokens(ctx.totalOverhead)}</div>
-        <div class="stat-card-label">Total Overhead</div>
-        <div class="stat-card-qualifier">tokens per message</div>
+        <div class="stat-card-value">${overheadPct}%</div>
+        <div class="stat-card-label">Context Used</div>
+        <div class="stat-card-qualifier">${fmtTokens(ctx.totalOverhead)} of ${fmtTokens(CONTEXT_WINDOW)}</div>
       </div>
       <div class="stat-card">
         <div class="stat-card-value">${activeSkills.length}</div>
@@ -457,25 +457,25 @@ function renderContext(data: DashboardData): string {
     </div>
 
     <div class="card">
-      <div class="card-header"><span>Token Breakdown by Component</span></div>
+      <div class="card-header"><span>Token Breakdown by Component</span><span class="label">% of context window</span></div>
       ${ctx.components.map((c) => {
-        const pct = (c.tokens / maxTokens) * 100;
+        const pct = (c.tokens / CONTEXT_WINDOW) * 100;
         return `<div class="bar-row">
           <span class="bar-row-label">${esc(c.name)}</span>
           <div class="bar-row-track"><div class="bar-row-fill" style="width:${pct}%"></div></div>
-          <span class="bar-row-value">${fmtTokens(c.tokens)}</span>
+          <span class="bar-row-value">${fmtTokens(c.tokens)} <span style="color:var(--c-text-dim);font-size:11px">(${pct.toFixed(1)}%)</span></span>
         </div>`;
       }).join("")}
     </div>
 
     ${activeSkills.length > 0 ? `
       <div class="card">
-        <div class="card-header"><span>Skills Breakdown (${activeSkills.length} active)</span><span class="label">${fmtTokens(activeSkills.reduce((s, sk) => s + sk.tokens, 0))} total</span></div>
+        <div class="card-header"><span>Skills (${activeSkills.length} active)</span><span class="label">${fmtTokens(activeSkills.reduce((s, sk) => s + sk.tokens, 0))} total</span></div>
         ${activeSkills.map((sk) => {
-          const pct = (sk.tokens / maxSkillTokens) * 100;
+          const pct = (sk.tokens / CONTEXT_WINDOW) * 100;
           return `<div class="bar-row">
             <span class="bar-row-label" title="${esc(sk.description)}">${esc(sk.name)}</span>
-            <div class="bar-row-track"><div class="bar-row-fill" style="width:${pct}%"></div></div>
+            <div class="bar-row-track"><div class="bar-row-fill" style="width:${Math.max(pct, 0.3)}%"></div></div>
             <span class="bar-row-value">${sk.tokens} tok</span>
           </div>`;
         }).join("")}
@@ -485,10 +485,9 @@ function renderContext(data: DashboardData): string {
     ${activeMcp.length > 0 ? `
       <div class="card">
         <div class="card-header"><span>MCP Servers (${activeMcp.length} active)</span></div>
-        ${activeMcp.map((srv) => `<div class="bar-row">
-          <span class="bar-row-label">${esc(srv.name)}</span>
-          <div class="bar-row-track"><div class="bar-row-fill" style="width:100%;background:${srv.isDisabled ? "var(--c-text-dim)" : "var(--c-accent-cyan)"}"></div></div>
-          <span class="bar-row-value" style="min-width:80px">${srv.toolCount > 0 ? srv.toolCount + " tools" : ""}</span>
+        ${activeMcp.map((srv) => `<div style="display:flex;align-items:center;gap:var(--s-2);padding:6px 0;border-bottom:1px solid var(--c-border)">
+          <span style="font-size:13px;font-family:var(--font-mono);color:var(--c-text-main);flex:1">${esc(srv.name)}</span>
+          <span style="font-size:12px;font-family:var(--font-mono);color:var(--c-text-dim)">${srv.toolCount > 0 ? srv.toolCount + " tools" : ""}</span>
         </div>`).join("")}
       </div>
     ` : ""}

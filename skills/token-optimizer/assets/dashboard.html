@@ -1759,7 +1759,8 @@ var DB = (function() {
     if (importsTokens > 0) vals.push(importsTokens);
     vals.push(c.mcp_tools ? c.mcp_tools.tokens : 0);
     vals.push(c.core_system ? c.core_system.tokens : 0);
-    var maxV = Math.max.apply(null, vals) || 1;
+    // Scale bars against context window, not against each other
+    var ctxWindow = 200000; // Claude models: 200K (Haiku) or 1M (Opus/Sonnet)
     var barLabels = ['CLAUDE.md', 'MEMORY.md', 'Skills', 'Commands'];
     if (rulesTokens > 0) barLabels.push('Rules');
     if (importsTokens > 0) barLabels.push('@imports');
@@ -1767,9 +1768,10 @@ var DB = (function() {
     barLabels.push('Core System');
     var memoryExists = c.memory_md && c.memory_md.exists !== false;
     var barsHtml = vals.map(function(v, i) {
-      var w = Math.max(3, (v / maxV) * 100);
+      var w = Math.max(0.3, (v / ctxWindow) * 100);
       var fixedClass = i === vals.length - 1 ? ' fixed' : '';
-      var valText = (i === 1 && !memoryExists) ? '—' : fn(v) + ' tok';
+      var pctText = (v / ctxWindow * 100).toFixed(1) + '%';
+      var valText = (i === 1 && !memoryExists) ? '—' : fn(v) + ' (' + pctText + ')';
       return '<div class="bar-row">' +
         '<span class="bar-label">' + barLabels[i] + '</span>' +
         '<div class="bar-track"><div class="bar-fill' + fixedClass + '" style="width:' + w + '%"></div></div>' +
@@ -1778,7 +1780,7 @@ var DB = (function() {
     }).join('');
     document.getElementById('chart-bars').innerHTML = barsHtml;
     document.getElementById('sat-desc').textContent =
-      'Core System is fixed by Claude Code. Everything else is yours to trim. The bigger the bar, the more tokens you can save.';
+      'Bars show % of context window each component uses. Core System is fixed by Claude Code. Everything else is yours to trim.';
     var caveatEl = document.getElementById('sat-caveat');
     if (!caveatEl) {
       caveatEl = document.createElement('div');
