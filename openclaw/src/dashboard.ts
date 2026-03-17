@@ -634,21 +634,25 @@ function renderAgents(data: DashboardData): string {
     </div>
 
     ${data.agents.map((a) => {
-      const totalModelCost = Object.values(a.models).reduce((s, c) => s + c, 0) || 1;
-      const modelSegments = Object.entries(a.models)
-        .sort((x, y) => y[1] - x[1])
-        .map(([m, c]) => {
+      const modelEntries = Object.entries(a.models).sort((x, y) => y[1] - x[1]);
+      const multiModel = modelEntries.length > 1;
+
+      // Only show stacked bar when there are multiple models to compare
+      let modelMixHtml = "";
+      if (multiModel) {
+        const totalModelCost = Object.values(a.models).reduce((s, c) => s + c, 0) || 1;
+        const segments = modelEntries.map(([m, c]) => {
           const pct = (c / totalModelCost) * 100;
           const pctStr = pct.toFixed(1);
           const color = modelColor(m);
           const label = pct >= 8 ? `<span class="segment-label">${Math.round(pct)}%</span>` : "";
           return `<div class="model-segment" style="width:${pctStr}%;background:${color};position:relative;overflow:hidden" data-tt-model="${esc(m)}" data-tt-pct="${pctStr}" data-tt-cost="${fmtCost(c)}">${label}</div>`;
         }).join("");
-
-      const legendItems = Object.entries(a.models)
-        .sort((x, y) => y[1] - x[1])
-        .map(([m]) => `<div class="model-legend-item"><div class="model-legend-dot" style="background:${modelColor(m)}"></div>${esc(m)}</div>`)
-        .join("");
+        const legend = modelEntries
+          .map(([m]) => `<div class="model-legend-item"><div class="model-legend-dot" style="background:${modelColor(m)}"></div>${esc(m)}</div>`)
+          .join("");
+        modelMixHtml = `<div class="model-bar">${segments}</div><div class="model-legend">${legend}</div>`;
+      }
 
       return `<div class="card">
         <div class="card-header">
@@ -661,9 +665,9 @@ function renderAgents(data: DashboardData): string {
           <div class="mini-stat-item"><div class="mini-val">${a.emptyPct.toFixed(0)}%</div><div class="mini-label">empty</div></div>
           <div class="mini-stat-item"><div class="mini-val">${a.abandonedCount}</div><div class="mini-label">abandoned</div></div>
           <div class="mini-stat-item"><div class="mini-val">${fmtTokens(a.tokens)}</div><div class="mini-label">tokens</div></div>
+          <div class="mini-stat-item"><div class="mini-val">${esc(a.dominantModel)}</div><div class="mini-label">model</div></div>
         </div>
-        <div class="model-bar">${modelSegments}</div>
-        <div class="model-legend">${legendItems}</div>
+        ${modelMixHtml}
       </div>`;
     }).join("")}
 
