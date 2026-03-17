@@ -1,17 +1,25 @@
 # Token Optimizer for OpenClaw
 
-Find the ghost tokens. Audit your OpenClaw setup, see where 25-38% of your context goes, fix it.
+Find the ghost tokens. Audit your OpenClaw setup, see where 15-20% of your context goes (up to 87% on smaller models), and fix it.
 
-## How Much Can It Save?
+## How Much Context Are You Losing?
 
-Real-world example from a Claude Code power user (30 days, 2,171 sessions):
+Before you type a single word, your context window is already partially consumed by overhead. Real-world breakdown from a power user setup:
 
-- **$355/month** in detected waste from a $21K monthly spend
-- $256/mo from 60 unused skills loading 142K tokens per API call
-- $83/mo from empty heartbeat runs (loaded context, produced nothing)
-- $17/mo from abandoned sessions (started, loaded full context, left)
+| Component | Tokens | % of 1M window | % of 200K window |
+|-----------|--------|----------------|------------------|
+| 60 loaded skills | 142,405 | 14.2% | 71.2% |
+| System prompt | ~15,000 | 1.5% | 7.5% |
+| MCP tool definitions | ~9,000 | 0.9% | 4.5% |
+| CLAUDE.md / SOUL.md | ~5,000 | 0.5% | 2.5% |
+| MEMORY.md | ~3,000 | 0.3% | 1.5% |
+| **Total overhead** | **~174K** | **17.4%** | **87%** |
 
-Typical OpenClaw savings: **$5-100/month** depending on agent count, model choice, and cron frequency.
+On a 1M window (Opus/Sonnet since March 13, 2026), 174K overhead is manageable but still means earlier compaction and degraded output quality as context fills. On a 200K window (Haiku, GPT-4o), the same setup is nearly unusable.
+
+Token Optimizer shows you exactly where those tokens go, per-skill and per-server, and lets you trim what you don't need.
+
+For API users, overhead also translates to cost ($5-355/month depending on volume and model).
 
 ## Install
 
