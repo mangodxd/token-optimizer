@@ -2178,7 +2178,7 @@ var DB = (function() {
       '<div class="stat-card"><div class="stat-card-value">' + t.session_count + '</div><div class="stat-card-label">Sessions (' + t.period_days + 'd)</div></div>' +
       '<div class="stat-card"><div class="stat-card-value">' + Math.round(t.avg_duration_minutes || 0) + 'm</div><div class="stat-card-label">Avg Duration</div></div>' +
       '<div class="stat-card"><div class="stat-card-value">' + fn(t.avg_input_tokens + t.avg_output_tokens) + '</div><div class="stat-card-label">Avg Tokens/Session</div></div>' +
-      '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">Avg Cache Hit Rate</div></div>' +
+      '<div class="stat-card"><div class="stat-card-value" style="color:#22c55e">' + avgCacheHit + (avgCacheHit !== 'N/A' ? '%' : '') + '</div><div class="stat-card-label">Avg Cache Hit Rate</div><div style="font-size:11px;color:var(--c-text-dim);margin-top:4px">Above 90% is normal for longer sessions. It means prompt caching is working well.</div></div>' +
       '</div>';
 
     // Shared data for skills sections
