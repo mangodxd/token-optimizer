@@ -7539,14 +7539,16 @@ if __name__ == "__main__":
                     f.unlink()
             except OSError:
                 pass
-        # Auto-fix missing quality bar cache hook (fixes frozen ContextQ for existing users)
+        # Auto-install quality bar on first run (statusline + cache hook)
+        # If no statusLine exists at all, install ours silently.
+        # If statusLine exists but cache hook is missing, fix that too.
         try:
             if SETTINGS_PATH.exists():
                 settings = json.loads(SETTINGS_PATH.read_text())
                 has_statusline = bool(settings.get("statusLine"))
                 hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
                 has_cache_hook = any("quality-cache" in str(h) for h in hooks)
-                if has_statusline and not has_cache_hook:
+                if not has_statusline or (has_statusline and not has_cache_hook):
                     setup_quality_bar()
         except Exception:
             pass
