@@ -4788,7 +4788,7 @@ def _collect_health_data():
     running_sessions = []
     try:
         result = subprocess.run(
-            ["ps", "-eo", "pid,lstart,etime,command"],
+            ["ps", "-eo", "pid,tty,lstart,etime,command"],
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0:
@@ -4797,14 +4797,17 @@ def _collect_health_data():
                 if not line:
                     continue
                 parts = line.split()
-                if len(parts) < 8:
+                if len(parts) < 9:
                     continue
-                command = " ".join(parts[7:])
+                # Fields: PID TTY LSTART(5 fields) ETIME COMMAND...
+                tty = parts[1]
+                command = " ".join(parts[8:])
                 if command.strip() == "claude" or command.startswith("claude "):
                     pid = int(parts[0])
-                    lstart = " ".join(parts[1:6])
-                    elapsed = parts[6]
+                    lstart = " ".join(parts[2:7])
+                    elapsed = parts[7]
                     elapsed_seconds = _parse_elapsed_time(elapsed)
+                    has_terminal = tty not in ("??", "-", "?")
 
                     running_sessions.append({
                         "pid": pid,
@@ -4812,6 +4815,8 @@ def _collect_health_data():
                         "elapsed_seconds": elapsed_seconds,
                         "elapsed_human": _format_elapsed(elapsed_seconds),
                         "command": command,
+                        "has_terminal": has_terminal,
+                        "tty": tty if has_terminal else None,
                     })
     except (subprocess.SubprocessError, OSError):
         return None
@@ -4828,6 +4833,10 @@ def _collect_health_data():
             flags.append("ZOMBIE")
         elif s["elapsed_seconds"] > 86400:
             flags.append("STALE")
+        if s.get("has_terminal"):
+            flags.append("TERMINAL")
+        else:
+            flags.append("HEADLESS")
         s["flags"] = flags
 
     automated = []
@@ -4975,7 +4984,7 @@ def kill_stale_sessions(threshold_hours=12, dry_run=False):
 
     print(f"\n  Terminated {killed} stale session{'s' if killed != 1 else ''}.")
     if killed > 0:
-        print(f"  These were headless/zombie Claude Code processes running >{threshold_hours}h.")
+        print(f"  These were Claude Code processes running >{threshold_hours}h.")
         print(f"  Your active terminal sessions are unaffected.\n")
 
 

@@ -2596,9 +2596,9 @@ var DB = (function() {
           '<div style="font-weight:500;color:#ef4444">' + staleCount + ' stale session' + (staleCount !== 1 ? 's' : '') + ' detected</div>' +
           '<button class="copy-fix-btn" id="kill-stale-btn" style="background:#ef4444;border-color:#ef4444">Copy Kill Command</button></div>' +
           '<div style="font-size:13px;color:var(--c-text-dim);line-height:1.5">' +
-          'These are headless Claude Code processes that have been running 24+ hours. ' +
-          'They are likely zombie sessions from automation or forgotten terminals that are no longer doing useful work. ' +
-          'Killing them frees system resources and stops them from showing up here.<br><br>' +
+          'These Claude Code sessions have been running 24+ hours. ' +
+          'Some may be your active terminals (marked TERMINAL), others may be forgotten or headless. ' +
+          'Check the status column before killing. Only kill sessions you are not actively using.<br><br>' +
           '<span style="font-family:var(--font-mono);font-size:12px;color:var(--c-text-main)">Option 1:</span> Click "Copy Kill Command" and paste in any terminal.<br>' +
           '<span style="font-family:var(--font-mono);font-size:12px;color:var(--c-text-main)">Option 2:</span> Run <code style="font-family:var(--font-mono);color:var(--c-accent-cyan)">python3 measure.py kill-stale</code> to auto-terminate all sessions running &gt;12 hours.<br>' +
           '<span style="font-family:var(--font-mono);font-size:12px;color:var(--c-text-main)">Option 3:</span> Run <code style="font-family:var(--font-mono);color:var(--c-accent-cyan)">python3 measure.py kill-stale --dry-run</code> to preview without killing.' +
