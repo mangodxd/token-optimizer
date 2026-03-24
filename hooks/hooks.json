@@ -105,6 +105,16 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' archive-result --quiet"
+          }
+        ]
+      }
+    ],
     "PostCompact": [
       {
         "hooks": [

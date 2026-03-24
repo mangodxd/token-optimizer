@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-2.6.2-green" alt="Version 2.6.2"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-3.0.0-green" alt="Version 3.0.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-Plugin-brightgreen" alt="OpenClaw Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/alexgreensh/token-optimizer" alt="License"></a>
@@ -68,7 +68,30 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 ---
 
-### NEW in v2.6: Per-Turn Analytics and Cost Intelligence
+### NEW in v3.0: Progressive Checkpoints, Tool Archive, Savings Tracking, JSONL Toolkit, Attention Optimizer
+
+| Feature | What You Get |
+|---------|-------------|
+| **Progressive Checkpoints** | Captures session state at 50%, 65%, and 80% context fill, not just at emergency compaction (~98%). Richer checkpoints because there's more context to extract from. Restores prefer the earliest (richest) checkpoint. |
+| **Tool Result Archive** | PostToolUse hook archives large tool results (>4KB) to disk. After compaction, use `expand <tool-use-id>` to retrieve any archived result instead of re-running the command. MCP tool results over 8KB get automatically trimmed with an expand hint. |
+| **Savings Dashboard** | Tracks cumulative dollar savings from setup optimization, checkpoint restores, and tool archiving. `savings` command shows a breakdown by category with daily averages and monthly estimates. |
+| **JSONL Toolkit** | Three utilities for session JSONL files: `jsonl-inspect` (stats, record counts, largest records), `jsonl-trim` (replace large tool results with placeholders), `jsonl-dedup` (detect and remove duplicate system reminders). All use streaming I/O and atomic writes. |
+| **Attention Optimizer** | Scores CLAUDE.md against the U-shaped attention curve. Flags critical rules (NEVER/ALWAYS/MUST) sitting in the low-attention zone (30-70% position). `attention-optimize` generates a reordered version that moves critical rules to high-attention zones. |
+
+```bash
+python3 measure.py savings                      # Dollar savings report (last 30 days)
+python3 measure.py attention-score               # Score CLAUDE.md attention placement
+python3 measure.py attention-optimize --dry-run  # Preview optimized section order
+python3 measure.py jsonl-inspect                 # Stats on current session JSONL
+python3 measure.py jsonl-trim --dry-run          # Preview trimming large tool results
+python3 measure.py jsonl-dedup --dry-run         # Preview removing duplicate reminders
+python3 measure.py expand --list                 # List all archived tool results
+python3 measure.py expand <tool-use-id>          # Retrieve a specific archived result
+```
+
+---
+
+### v2.6: Per-Turn Analytics and Cost Intelligence
 
 | Feature | What You Get |
 |---------|-------------|
@@ -107,6 +130,10 @@ python3 measure.py kill-stale --dry-run       # Preview without killing
 | `trends` | **"What's actually being used?"** Skill adoption, model mix, overhead trajectory over time. |
 | `coach` | **"Where do I start?"** Detects 8 named anti-patterns and recommends specific fixes. |
 | `dashboard` | **"Show me everything."** Interactive HTML dashboard with all analytics. |
+| `savings` | **"How much have I saved?"** Cumulative dollar savings from optimizations, checkpoint restores, and archives. |
+| `attention-score` | **"Is my CLAUDE.md well-structured?"** Scores sections against the attention curve, flags critical rules in low-attention zones. |
+| `jsonl-inspect` | **"What's in this session?"** Record counts, token distribution, top 10 largest records, compaction markers. |
+| `expand` | **"Get that result back."** Retrieves tool results archived before compaction. Never re-run a command twice. |
 | `/token-optimizer` | **"Fix it for me."** Interactive audit with 6 parallel agents. Guided fixes with diffs and backups. |
 
 ### Quality Scoring (7 signals)
@@ -257,7 +284,11 @@ Tell it your goal. Get back specific, prioritized fixes with exact token savings
 | Quality degradation tracking | MRCR-based bands | Basic capacity % | No |
 | Guided remediation | Yes, with token estimates | Basic suggestions | No |
 | Runtime output containment | No | No | Yes (98% reduction) |
-| Smart compaction survival | Checkpoint + restore | No | Session guide |
+| Smart compaction survival | Progressive checkpoints + restore | No | Session guide |
+| Tool result archive | Yes (cross-compaction recovery) | No | No |
+| Dollar savings tracking | Yes (per-category breakdown) | No | No |
+| JSONL session toolkit | Inspect, trim, dedup | No | No |
+| Attention curve optimizer | Yes (CLAUDE.md reordering) | No | No |
 | Model recommendation | Yes (Sonnet vs Opus by context) | No | No |
 | Usage trends + dashboard | SQLite + interactive HTML | No | Session stats |
 | Per-turn cost analytics | Yes (4 pricing tiers) | No | No |
@@ -267,6 +298,29 @@ Tell it your goal. Get back specific, prioritized fixes with exact token savings
 
 `/context` shows capacity. Token Optimizer fixes the causes.
 context-mode prevents runtime floods. Token Optimizer prevents structural waste.
+
+---
+
+## VS Code Users
+
+Using Claude Code in the VS Code extension? Most of Token Optimizer works identically:
+
+| Feature | CLI | VS Code Extension |
+|---------|-----|-------------------|
+| Smart Compaction (checkpoint + restore) | Works | Works |
+| Quality tracking + session data | Works | Works |
+| All hooks (SessionEnd, PreCompact, etc.) | Works | Works |
+| Dashboard (localhost:24842) | Works | Works |
+| Status line (quality bar in terminal) | Works | Not available |
+
+**The status line is CLI-only.** The VS Code extension doesn't support Claude Code's `statusLine` setting. This is a Claude Code limitation, not a Token Optimizer limitation.
+
+**Best options for VS Code:**
+- **Dashboard**: Bookmark `http://localhost:24842/` for always-current analytics. Run `python3 measure.py setup-daemon` to enable auto-refresh after every session.
+- **Integrated terminal**: Run `claude` in VS Code's built-in terminal to get the full CLI experience, including the quality bar.
+- **VS Code extension**: On the roadmap. [Follow #3](https://github.com/alexgreensh/token-optimizer/issues/3) for updates.
+
+> **Note on `--bare` mode**: Running Claude Code with the `--bare` flag (for scripted/CI usage) skips all hooks and plugin sync. Token Optimizer's Smart Compaction, quality tracking, and session data collection require hooks and won't activate in `--bare` mode. This is expected, `--bare` is designed for lightweight scripted calls.
 
 ---
 

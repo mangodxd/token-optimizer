@@ -30,6 +30,20 @@ Usage:
     python3 measure.py conversation --json       # Machine-readable per-turn data
     python3 measure.py pricing-tier              # Show/set pricing tier
     python3 measure.py pricing-tier vertex-regional # Set to Vertex AI Regional
+    python3 measure.py jsonl-inspect [session-id]  # JSONL session file stats
+    python3 measure.py jsonl-trim                  # Trim large tool results (dry-run)
+    python3 measure.py jsonl-trim --apply           # Trim with backup + sidecar
+    python3 measure.py jsonl-dedup                 # Find duplicate system reminders (dry-run)
+    python3 measure.py jsonl-dedup --apply          # Remove duplicates with backup
+    python3 measure.py attention-score               # Score CLAUDE.md against attention curve
+    python3 measure.py attention-score FILE           # Score any file
+    python3 measure.py attention-score --json         # Machine-readable output
+    python3 measure.py attention-optimize             # Dry-run: propose section reordering
+    python3 measure.py attention-optimize --apply     # Apply reordering (backup + write)
+    python3 measure.py archive-result                  # PostToolUse hook: archive large tool results
+    python3 measure.py expand TOOL_USE_ID              # Retrieve archived tool result
+    python3 measure.py expand --list                   # List all archived results
+    python3 measure.py archive-cleanup [SESSION_ID]    # Clean up archived tool results
 
     Global flags:
     --context-size N                      # Override context window (e.g., 1000000)
@@ -41,6 +55,7 @@ SPDX-License-Identifier: AGPL-3.0-only
 """
 
 import hashlib
+import heapq
 import json
 import os
 import glob
@@ -1030,7 +1045,11 @@ def detect_context_window():
     if model:
         # Haiku stays at 200K
         if "haiku" in model:
-            return 200_000, f"model: {model} (Haiku = 200K)"
+            reason = f"model: {model} (Haiku = 200K)"
+            if "claude-3-haiku" in model or "3-haiku" in model:
+                reason += " [WARNING: retires April 19, 2026. Migrate to Haiku 4.5]"
+                print(f"[Token Optimizer] WARNING: {model} retires April 19, 2026. Migrate to claude-haiku-4-5.", file=sys.stderr)
+            return 200_000, reason
         if _is_1m_model(model):
             return 1_000_000, f"model: {model} (1M)"
     # Check config files for model preference
@@ -1043,7 +1062,11 @@ def detect_context_window():
                 m = (cfg.get("model") or cfg.get("primaryModel") or "").lower()
                 if m:
                     if "haiku" in m:
-                        return 200_000, f"{cfg_name.split('.')[0]}: {m} (Haiku = 200K)"
+                        reason = f"{cfg_name.split('.')[0]}: {m} (Haiku = 200K)"
+                        if "claude-3-haiku" in m or "3-haiku" in m:
+                            reason += " [WARNING: retires April 19, 2026. Migrate to Haiku 4.5]"
+                            print(f"[Token Optimizer] WARNING: {m} retires April 19, 2026. Migrate to claude-haiku-4-5.", file=sys.stderr)
+                        return 200_000, reason
                     if _is_1m_model(m):
                         return 1_000_000, f"{cfg_name.split('.')[0]}: {m} (1M)"
             except (json.JSONDecodeError, PermissionError, OSError):
@@ -1918,6 +1941,7 @@ def compare_snapshots():
         after_pct = (total_after + 15000) / ctx_window * 100
         print(f"\n  Context budget: {before_pct:.1f}% -> {after_pct:.1f}% of {ctx_label} window")
         print(f"  That's {total_saved:,} more tokens for actual work per message.")
+        _log_savings_event("setup_optimization", total_saved, detail=f"compare: {total_saved} tokens reduced")
 
     # File exclusion and hooks changes
     b_excl = bc.get("file_exclusion", {})
@@ -2085,8 +2109,14 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             """Handle API requests for skill/MCP management."""
             path = self.path.split("?")[0]
 
-            # Read JSON body
+            # Body size limit
+            MAX_BODY = 65536  # 64KB
             content_len = int(self.headers.get("Content-Length", 0))
+            if content_len > MAX_BODY:
+                self.send_error(413, "Request body too large")
+                return
+
+            # Read JSON body
             body = {}
             if content_len > 0:
                 try:
@@ -2135,14 +2165,18 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self.headers.get("Origin", "")
+            if origin in (f"http://127.0.0.1:{self.server.server_port}", f"http://localhost:{self.server.server_port}"):
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.end_headers()
             self.wfile.write(body)
 
         def do_OPTIONS(self):
             """Handle CORS preflight."""
             self.send_response(204)
-            self.send_header("Access-Control-Allow-Origin", "*")
+            origin = self.headers.get("Origin", "")
+            if origin in (f"http://127.0.0.1:{self.server.server_port}", f"http://localhost:{self.server.server_port}"):
+                self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type")
             self.end_headers()
@@ -2252,6 +2286,10 @@ def generate_dashboard(coord_path):
     # Collect hook installation status for dashboard toggles
     hook_status = _collect_hook_status_for_dashboard()
 
+    # Savings data for dashboard
+    print("  Collecting savings data...")
+    savings_data = _get_savings_summary(days=30)
+
     # Assemble data
     data = {
         "snapshot": snapshot,
@@ -2262,6 +2300,7 @@ def generate_dashboard(coord_path):
         "coach": coach,
         "quality": quality,
         "hooks": hook_status,
+        "savings": savings_data,
         "generated_at": datetime.now().isoformat(),
     }
 
@@ -2428,7 +2467,15 @@ def _collect_management_data(components=None, trends=None):
 
 def _manage_skill(action, name):
     """Archive or restore a skill."""
+    # Validate name: prevent path traversal
+    if not name or "/" in name or "\\" in name or name in (".", "..") or "\0" in name:
+        print(f"  [!] Invalid skill name: {name}")
+        return False
     skills_dir = CLAUDE_DIR / "skills"
+    resolved = (skills_dir / name).resolve()
+    if not str(resolved).startswith(str(skills_dir.resolve())):
+        print(f"  [!] Path traversal detected: {name}")
+        return False
     backups_dir = CLAUDE_DIR / "_backups"
     today = datetime.now().strftime("%Y%m%d")
     archive_dir = backups_dir / f"skills-archived-{today}"
@@ -3939,6 +3986,16 @@ CREATE TABLE IF NOT EXISTS subagent_daily (
     spawn_count INTEGER,
     PRIMARY KEY (date, agent_type)
 );
+
+CREATE TABLE IF NOT EXISTS savings_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    tokens_saved INTEGER DEFAULT 0,
+    cost_saved_usd REAL DEFAULT 0.0,
+    session_id TEXT,
+    detail TEXT
+);
 """
 
 
@@ -3960,6 +4017,80 @@ def _init_trends_db():
     except sqlite3.Error:
         pass
     return conn
+
+
+def _log_savings_event(event_type, tokens_saved, session_id=None, detail=None, model="claude-sonnet-4-20250514"):
+    """Log a savings event to the trends database."""
+    try:
+        # Calculate cost saved using input token rate for the model
+        tier = _load_pricing_tier()
+        tier_data = PRICING_TIERS.get(tier, PRICING_TIERS["anthropic"])
+        normalized = _normalize_model_name(model) if model else "sonnet"
+        rates = tier_data["claude_models"].get(normalized, tier_data["claude_models"].get("sonnet", {}))
+        cost_per_mtok = rates.get("input", 3.0)
+        cost_saved = tokens_saved * cost_per_mtok / 1e6
+
+        conn = _init_trends_db()
+        try:
+            conn.execute(
+                "INSERT INTO savings_events (timestamp, event_type, tokens_saved, cost_saved_usd, session_id, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (datetime.now().isoformat(), event_type, tokens_saved, cost_saved, session_id, detail),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass  # Never crash the caller over savings tracking
+
+
+def _get_savings_summary(days=30):
+    """Query savings events and return a summary dict."""
+    try:
+        conn = _init_trends_db()
+        try:
+            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+            rows = conn.execute(
+                "SELECT event_type, COUNT(*) as cnt, SUM(tokens_saved) as tok, SUM(cost_saved_usd) as cost "
+                "FROM savings_events WHERE timestamp >= ? GROUP BY event_type ORDER BY tok DESC",
+                (cutoff,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        by_category = {}
+        total_tokens = 0
+        total_cost = 0.0
+        total_events = 0
+        for event_type, cnt, tok, cost in rows:
+            by_category[event_type] = {
+                "events": cnt,
+                "tokens_saved": tok or 0,
+                "cost_saved_usd": round(cost or 0.0, 4),
+            }
+            total_tokens += tok or 0
+            total_cost += cost or 0.0
+            total_events += cnt
+
+        daily_avg = total_cost / days if days > 0 else 0.0
+
+        return {
+            "total_tokens": total_tokens,
+            "total_cost_usd": round(total_cost, 4),
+            "total_events": total_events,
+            "by_category": by_category,
+            "daily_avg_usd": round(daily_avg, 4),
+            "period_days": days,
+        }
+    except Exception:
+        return {
+            "total_tokens": 0,
+            "total_cost_usd": 0.0,
+            "total_events": 0,
+            "by_category": {},
+            "daily_avg_usd": 0.0,
+            "period_days": days,
+        }
 
 
 def _is_file_collected(conn, jsonl_path):
@@ -5498,6 +5629,10 @@ _CHECKPOINT_RETENTION_DAYS = int(os.environ.get("TOKEN_OPTIMIZER_CHECKPOINT_RETE
 _CHECKPOINT_RETENTION_MAX = int(os.environ.get("TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_MAX", "50"))
 _RELEVANCE_THRESHOLD = float(os.environ.get("TOKEN_OPTIMIZER_RELEVANCE_THRESHOLD", "0.3"))
 
+# Progressive checkpoint thresholds (% fill, fires once each per session)
+_PROGRESSIVE_BANDS = [50, 65, 80]
+_PROGRESSIVE_ENABLED = os.environ.get("TOKEN_OPTIMIZER_PROGRESSIVE_CHECKPOINTS", "1") not in ("0", "false", "no", "off")
+
 # Shared decision-detection regex (used by both quality analyzer and state extractor)
 _DECISION_RE = re.compile(
     r'\b(chose|decided|because|instead of|went with|going with|switched to|'
@@ -5674,14 +5809,7 @@ def _parse_jsonl_for_quality(filepath):
                         if isinstance(content, list):
                             for block in content:
                                 if isinstance(block, dict) and block.get("type") == "tool_result":
-                                    result_content = block.get("content", "")
-                                    if isinstance(result_content, list):
-                                        result_text = " ".join(
-                                            b.get("text", "") if isinstance(b, dict) else str(b)
-                                            for b in result_content
-                                        )
-                                    else:
-                                        result_text = str(result_content)
+                                    result_text = _extract_tool_result_text(block)
                                     tool_id = block.get("tool_use_id", "")
                                     tool_results.append((idx, tool_id, len(result_text), False))
 
@@ -6172,6 +6300,1202 @@ def _collect_quality_for_dashboard():
         return None
 
 
+# ========== JSONL Toolkit (v3.0) ==========
+# Read/write utilities for JSONL session files: inspect, trim, dedup.
+
+
+def _extract_tool_result_text(block):
+    """Extract text content from a tool_result content block.
+
+    Handles both string and list content formats. Used by quality parsing,
+    jsonl_inspect, jsonl_trim, and _jsonl_record_text_size.
+    """
+    rc = block.get("content", "")
+    if isinstance(rc, list):
+        return " ".join(
+            b.get("text", "") if isinstance(b, dict) else str(b)
+            for b in rc
+        )
+    return str(rc)
+
+
+def _resolve_jsonl_path(arg=None):
+    """Resolve a JSONL file path from a session ID, file path, or auto-detect.
+
+    Returns (Path, error_string). On success error_string is None.
+    """
+    if arg and not arg.startswith("--"):
+        p = Path(arg)
+        if p.exists() and p.suffix == ".jsonl":
+            return p, None
+        # Treat as session ID
+        found = _find_session_jsonl_by_id(arg)
+        if found:
+            return found, None
+        return None, f"Session '{arg}' not found."
+    # Auto-detect
+    found = _find_current_session_jsonl()
+    if found:
+        return found, None
+    return None, "No active session found. Provide a session ID or path."
+
+
+def _jsonl_record_text_size(record):
+    """Return total character count of meaningful text in a record."""
+    rec_type = record.get("type", "")
+    total = 0
+
+    if rec_type == "user":
+        text = _extract_user_text(record)
+        total += len(text)
+    elif rec_type == "assistant":
+        msg = record.get("message", {})
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        total += len(block.get("text", ""))
+                    elif block.get("type") == "tool_use":
+                        total += len(json.dumps(block.get("input", {})))
+    elif rec_type == "system":
+        total += len(str(record.get("message", "")))
+    # tool_result records embedded in user messages (skip for user records to avoid double-counting)
+    if rec_type != "user":
+        msg = record.get("message", {})
+        if isinstance(msg, dict):
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        total += len(_extract_tool_result_text(block))
+    return total
+
+
+def _classify_record(record):
+    """Classify a JSONL record into a category string.
+
+    Returns one of: 'user', 'assistant', 'system', 'system_reminder',
+    'tool_result', 'compact_boundary', 'unknown'.
+    """
+    rec_type = record.get("type", "")
+    if rec_type == "system":
+        msg_content = str(record.get("message", ""))
+        if record.get("subtype") == "compact_boundary" or "compactMetadata" in record:
+            return "compact_boundary"
+        if "system-reminder" in msg_content:
+            return "system_reminder"
+        return "system"
+    if rec_type == "user":
+        # Check if it contains tool_result blocks
+        msg = record.get("message", {})
+        if isinstance(msg, dict):
+            content = msg.get("content", [])
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        return "tool_result"
+        return "user"
+    if rec_type == "assistant":
+        return "assistant"
+    return rec_type or "unknown"
+
+
+def jsonl_inspect(arg=None, as_json=False):
+    """Inspect a JSONL session file and print stats."""
+    filepath, err = _resolve_jsonl_path(arg)
+    if err:
+        if as_json:
+            print(json.dumps({"error": err}))
+        else:
+            print(f"[Error] {err}")
+        return
+
+    file_size = filepath.stat().st_size
+
+    counts_by_type = {}
+    total_records = 0
+    compaction_count = 0
+    largest_records = []  # (index, char_count, category, line_preview)
+    tool_result_chars = 0
+    message_chars = 0
+    system_reminder_chars = 0
+    system_reminder_hashes = []
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for idx, line in enumerate(f):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                total_records += 1
+                category = _classify_record(record)
+                counts_by_type[category] = counts_by_type.get(category, 0) + 1
+
+                if category == "compact_boundary":
+                    compaction_count += 1
+
+                char_count = _jsonl_record_text_size(record)
+
+                # Track distribution
+                if category == "tool_result":
+                    tool_result_chars += char_count
+                elif category == "system_reminder":
+                    system_reminder_chars += char_count
+                    content_hash = hashlib.sha256(str(record.get("message", "")).encode()).hexdigest()[:16]
+                    system_reminder_hashes.append(content_hash)
+                elif category in ("user", "assistant", "system"):
+                    message_chars += char_count
+
+                # Track largest (min-heap of top 10)
+                entry = (char_count, idx, category)
+                if len(largest_records) < 10:
+                    heapq.heappush(largest_records, entry)
+                elif char_count > largest_records[0][0]:
+                    heapq.heapreplace(largest_records, entry)
+
+    except (PermissionError, OSError) as e:
+        if as_json:
+            print(json.dumps({"error": str(e)}))
+        else:
+            print(f"[Error] Cannot read file: {e}")
+        return
+
+    # Sort top 10 largest (heap entries are (char_count, idx, category))
+    top10 = sorted(largest_records, reverse=True)
+
+    total_chars = tool_result_chars + message_chars + system_reminder_chars
+    est_tokens = int(total_chars / CHARS_PER_TOKEN)
+
+    # Duplicate system reminders
+    seen_hashes = set()
+    dup_reminder_count = 0
+    for h in system_reminder_hashes:
+        if h in seen_hashes:
+            dup_reminder_count += 1
+        seen_hashes.add(h)
+
+    result = {
+        "file": str(filepath),
+        "file_size_bytes": file_size,
+        "total_records": total_records,
+        "estimated_tokens": est_tokens,
+        "counts_by_type": counts_by_type,
+        "compaction_markers": compaction_count,
+        "token_distribution": {
+            "tool_results": int(tool_result_chars / CHARS_PER_TOKEN),
+            "messages": int(message_chars / CHARS_PER_TOKEN),
+            "system_reminders": int(system_reminder_chars / CHARS_PER_TOKEN),
+        },
+        "duplicate_system_reminders": dup_reminder_count,
+        "top_10_largest": [
+            {"index": r[1], "chars": r[0], "type": r[2], "est_tokens": int(r[0] / CHARS_PER_TOKEN)}
+            for r in top10
+        ],
+    }
+
+    if as_json:
+        print(json.dumps(result, indent=2))
+        return
+
+    # Pretty print
+    print(f"\n  JSONL Session Inspector")
+    print(f"  {'=' * 50}")
+    print(f"  File: {filepath}")
+    print(f"  Size: {file_size:,} bytes ({file_size / 1024:.1f} KB)")
+    print(f"  Records: {total_records:,}")
+    print(f"  Estimated tokens: {est_tokens:,}")
+    print()
+
+    print(f"  Record counts by type:")
+    for rtype, count in sorted(counts_by_type.items(), key=lambda x: -x[1]):
+        print(f"    {rtype:25s} {count:6,}")
+    print()
+
+    print(f"  Token distribution:")
+    for label, tokens in result["token_distribution"].items():
+        pct = (tokens / est_tokens * 100) if est_tokens > 0 else 0
+        bar = "#" * int(pct / 2)
+        print(f"    {label:25s} {tokens:8,} tokens ({pct:5.1f}%)  {bar}")
+    print()
+
+    if compaction_count > 0:
+        print(f"  Compaction markers: {compaction_count}")
+    if dup_reminder_count > 0:
+        print(f"  Duplicate system reminders: {dup_reminder_count} (waste)")
+    print()
+
+    if top10:
+        print(f"  Top 10 largest records:")
+        print(f"    {'Index':>8s}  {'Type':>20s}  {'Chars':>10s}  {'~Tokens':>8s}")
+        print(f"    {'-' * 8}  {'-' * 20}  {'-' * 10}  {'-' * 8}")
+        for r in top10:
+            print(f"    {r[1]:>8,}  {r[2]:>20s}  {r[0]:>10,}  {int(r[0] / CHARS_PER_TOKEN):>8,}")
+    print()
+
+
+def jsonl_trim(arg=None, apply=False, threshold=4000):
+    """Trim large tool_result content from historical JSONL records.
+
+    Default is dry-run. Pass apply=True to actually modify.
+    Threshold is in characters (default 4000, roughly 1000 tokens).
+    """
+    filepath, err = _resolve_jsonl_path(arg)
+    if err:
+        print(f"[Error] {err}")
+        return
+
+    # First pass: count what would be trimmed
+    trimmable = []  # (line_index, tool_use_id, original_size, est_tokens)
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for idx, line in enumerate(f):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                msg = record.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    continue
+
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "tool_result":
+                        continue
+                    result_text = _extract_tool_result_text(block)
+
+                    if len(result_text) > threshold:
+                        tool_id = block.get("tool_use_id", "unknown")
+                        est_tok = int(len(result_text) / CHARS_PER_TOKEN)
+                        trimmable.append((idx, tool_id, len(result_text), est_tok))
+
+    except (PermissionError, OSError) as e:
+        print(f"[Error] Cannot read file: {e}")
+        return
+
+    if not trimmable:
+        print(f"[Token Optimizer] No tool results exceed {threshold} chars. Nothing to trim.")
+        return
+
+    total_chars_saved = sum(t[2] for t in trimmable)
+    total_tokens_saved = int(total_chars_saved / CHARS_PER_TOKEN)
+
+    print(f"\n  JSONL Trim {'(DRY RUN)' if not apply else '(APPLYING)'}")
+    print(f"  {'=' * 50}")
+    print(f"  File: {filepath}")
+    print(f"  Threshold: {threshold:,} chars (~{int(threshold / CHARS_PER_TOKEN):,} tokens)")
+    print(f"  Trimmable tool results: {len(trimmable)}")
+    print(f"  Total chars to trim: {total_chars_saved:,}")
+    print(f"  Estimated token savings: {total_tokens_saved:,}")
+    print()
+
+    # Show top 5 largest trimmable
+    sorted_trim = sorted(trimmable, key=lambda x: -x[2])[:5]
+    print(f"  Top trimmable records:")
+    print(f"    {'Line':>8s}  {'Tool ID':>20s}  {'Chars':>10s}  {'~Tokens':>8s}")
+    print(f"    {'-' * 8}  {'-' * 20}  {'-' * 10}  {'-' * 8}")
+    for t in sorted_trim:
+        tid = t[1][:20] if len(t[1]) > 20 else t[1]
+        print(f"    {t[0]:>8,}  {tid:>20s}  {t[2]:>10,}  {t[3]:>8,}")
+    print()
+
+    if not apply:
+        print(f"  This is a dry run. Use --apply to trim.")
+        print()
+        return
+
+    # Apply: create backup, write sidecar, stream-modify
+    import shutil
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = Path(str(filepath) + f".{ts}.bak")
+    sidecar_path = Path(str(filepath).replace(".jsonl", ".trimmed.jsonl"))
+
+    # Backup
+    shutil.copy2(filepath, backup_path)
+    print(f"  Backup saved: {backup_path}")
+
+    # Build set of trimmable line indices for fast lookup
+    trim_lines = set(t[0] for t in trimmable)
+
+    # Stream: read original, write modified to temp, then atomic replace
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jsonl", dir=str(filepath.parent))
+    sidecar_entries = []
+    trimmed_count = 0
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as fin, \
+             os.fdopen(tmp_fd, "w", encoding="utf-8") as fout:
+            for idx, line in enumerate(fin):
+                if idx not in trim_lines:
+                    fout.write(line)
+                    continue
+
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    fout.write(line)
+                    continue
+
+                msg = record.get("message", {})
+                if not isinstance(msg, dict):
+                    fout.write(line)
+                    continue
+                content = msg.get("content", [])
+                if not isinstance(content, list):
+                    fout.write(line)
+                    continue
+
+                modified = False
+                for block in content:
+                    if not isinstance(block, dict):
+                        continue
+                    if block.get("type") != "tool_result":
+                        continue
+                    result_text = _extract_tool_result_text(block)
+
+                    if len(result_text) > threshold:
+                        tool_id = block.get("tool_use_id", "unknown")
+                        est_tok = int(len(result_text) / CHARS_PER_TOKEN)
+
+                        # Save original to sidecar
+                        sidecar_entries.append({
+                            "record_index": idx,
+                            "tool_use_id": tool_id,
+                            "original_chars": len(result_text),
+                            "original_content": block.get("content", ""),
+                        })
+
+                        # Replace content with placeholder
+                        block["content"] = f"[trimmed - {len(result_text)} chars, {est_tok} tokens]"
+                        modified = True
+                        trimmed_count += 1
+
+                fout.write(json.dumps(record) + "\n")
+
+        # Atomic replace
+        os.replace(tmp_path, filepath)
+
+        # Write sidecar
+        with open(sidecar_path, "w", encoding="utf-8") as sf:
+            for entry in sidecar_entries:
+                sf.write(json.dumps(entry) + "\n")
+
+        print(f"  Trimmed {trimmed_count} tool results.")
+        print(f"  Sidecar saved: {sidecar_path}")
+        print(f"  Estimated tokens recovered: {total_tokens_saved:,}")
+        print()
+
+    except Exception as e:
+        # Clean up temp file on failure
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        print(f"[Error] Trim failed: {e}")
+        print(f"  Original file is unchanged (backup at {backup_path})")
+
+
+def jsonl_dedup(arg=None, apply=False):
+    """Detect and remove duplicate system_reminder injections from JSONL.
+
+    Default is dry-run. Pass apply=True to actually modify.
+    """
+    filepath, err = _resolve_jsonl_path(arg)
+    if err:
+        print(f"[Error] {err}")
+        return
+
+    # First pass: find duplicates
+    seen_hashes = {}  # hash -> first line index
+    duplicates = []   # (line_index, content_hash, char_count, est_tokens)
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            for idx, line in enumerate(f):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                rec_type = record.get("type", "")
+                if rec_type != "system":
+                    continue
+
+                msg_content = str(record.get("message", ""))
+                if "system-reminder" not in msg_content:
+                    continue
+
+                content_hash = hashlib.sha256(msg_content.encode()).hexdigest()[:16]
+                char_count = len(msg_content)
+                est_tok = int(char_count / CHARS_PER_TOKEN)
+
+                if content_hash in seen_hashes:
+                    duplicates.append((idx, content_hash, char_count, est_tok))
+                else:
+                    seen_hashes[content_hash] = idx
+
+    except (PermissionError, OSError) as e:
+        print(f"[Error] Cannot read file: {e}")
+        return
+
+    total_waste_chars = sum(d[2] for d in duplicates)
+    total_waste_tokens = int(total_waste_chars / CHARS_PER_TOKEN)
+
+    print(f"\n  JSONL Dedup {'(DRY RUN)' if not apply else '(APPLYING)'}")
+    print(f"  {'=' * 50}")
+    print(f"  File: {filepath}")
+    print(f"  Unique system reminders: {len(seen_hashes)}")
+    print(f"  Duplicate injections: {len(duplicates)}")
+    print(f"  Estimated waste: {total_waste_chars:,} chars (~{total_waste_tokens:,} tokens)")
+    print()
+
+    if not duplicates:
+        print(f"  No duplicate system reminders found. File is clean.")
+        print()
+        return
+
+    # Group duplicates by hash for reporting
+    dup_by_hash = {}
+    for d in duplicates:
+        dup_by_hash.setdefault(d[1], []).append(d)
+
+    print(f"  Duplicate groups:")
+    for h, dups in sorted(dup_by_hash.items(), key=lambda x: -sum(d[2] for d in x[1])):
+        first_idx = seen_hashes[h]
+        waste = sum(d[2] for d in dups)
+        print(f"    Hash {h}: first at line {first_idx}, {len(dups)} duplicate(s), ~{int(waste / CHARS_PER_TOKEN):,} wasted tokens")
+    print()
+
+    if not apply:
+        print(f"  This is a dry run. Use --apply to remove duplicates.")
+        print()
+        return
+
+    # Apply: backup, stream, remove duplicate lines
+    import shutil
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = Path(str(filepath) + f".{ts}.bak")
+    shutil.copy2(filepath, backup_path)
+    print(f"  Backup saved: {backup_path}")
+
+    dup_line_indices = set(d[0] for d in duplicates)
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".jsonl", dir=str(filepath.parent))
+    removed_count = 0
+
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as fin, \
+             os.fdopen(tmp_fd, "w", encoding="utf-8") as fout:
+            for idx, line in enumerate(fin):
+                if idx in dup_line_indices:
+                    removed_count += 1
+                    continue
+                fout.write(line)
+
+        os.replace(tmp_path, filepath)
+        print(f"  Removed {removed_count} duplicate system reminders.")
+        print(f"  Estimated tokens recovered: {total_waste_tokens:,}")
+        print()
+
+    except Exception as e:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        print(f"[Error] Dedup failed: {e}")
+        print(f"  Original file is unchanged (backup at {backup_path})")
+
+
+# ========== Lost-in-the-Middle Optimizer (v3.0) ==========
+# Scores files against the U-shaped attention curve: LLMs attend more to
+# the beginning (0-30%) and end (70-100%) of context, less to the middle.
+# Flags critical rules (NEVER/ALWAYS/MUST/etc.) that land in the low-attention zone.
+
+_CRITICAL_PATTERN = re.compile(
+    r'\b(NEVER|ALWAYS|MUST|NON-NEGOTIABLE|IMPORTANT|CRITICAL)\b',
+    re.IGNORECASE
+)
+
+_LOW_ZONE_START = 0.30
+_LOW_ZONE_END = 0.70
+
+
+def _parse_sections(filepath):
+    """Parse a markdown file into sections split on # or ## headers.
+
+    Returns list of dicts:
+      {title, level, content, char_start, char_end, lines}
+    where char_start/char_end are character offsets in the file.
+    """
+    try:
+        text = Path(filepath).read_text(encoding="utf-8", errors="replace")
+    except (OSError, IOError):
+        return []
+
+    sections = []
+    header_re = re.compile(r'^(#{1,2})\s+(.+)', re.MULTILINE)
+    matches = list(header_re.finditer(text))
+
+    if not matches:
+        # Whole file is one section
+        lines = text.splitlines()
+        return [{
+            "title": Path(filepath).name,
+            "level": 0,
+            "content": text,
+            "char_start": 0,
+            "char_end": len(text),
+            "lines": lines,
+        }]
+
+    # If there's content before the first header, capture it
+    if matches[0].start() > 0:
+        pre = text[:matches[0].start()]
+        if pre.strip():
+            sections.append({
+                "title": "(preamble)",
+                "level": 0,
+                "content": pre,
+                "char_start": 0,
+                "char_end": matches[0].start(),
+                "lines": pre.splitlines(),
+            })
+
+    for i, m in enumerate(matches):
+        start = m.start()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+        content = text[start:end]
+        sections.append({
+            "title": m.group(2).strip(),
+            "level": len(m.group(1)),
+            "content": content,
+            "char_start": start,
+            "char_end": end,
+            "lines": content.splitlines(),
+        })
+
+    return sections
+
+
+def _find_critical_rules(lines):
+    """Find lines containing critical keywords. Returns list of stripped line texts."""
+    results = []
+    for line in lines:
+        if _CRITICAL_PATTERN.search(line):
+            stripped = line.strip().lstrip("-*> ").strip()
+            if stripped and len(stripped) > 5:
+                results.append(stripped)
+    return results
+
+
+def _classify_zone(pos_start, pos_end):
+    """Classify a section's zone based on its midpoint position (0.0-1.0)."""
+    mid = (pos_start + pos_end) / 2
+    if mid < _LOW_ZONE_START:
+        return "HIGH"
+    elif mid > _LOW_ZONE_END:
+        return "HIGH"
+    else:
+        return "LOW"
+
+
+def _score_attention(sections_analyzed):
+    """Calculate overall attention score (0-100).
+
+    100 = all critical rules in HIGH zone
+    Deductions for each critical rule in LOW zone.
+    """
+    total_critical = 0
+    low_critical = 0
+    for s in sections_analyzed:
+        total_critical += s["critical_count"]
+        if s["zone"] == "LOW":
+            low_critical += s["critical_count"]
+    if total_critical == 0:
+        return 100
+    ratio = low_critical / total_critical
+    # Score: 100 minus penalty proportional to ratio of critical rules in LOW zone
+    score = max(0, int(100 - (ratio * 100 * 0.8)))
+    return score
+
+
+def _analyze_attention_sections(sections):
+    """Shared analysis for attention_score and attention_optimize.
+
+    Returns (analyzed, total_chars, total_tokens) where analyzed is a list
+    of dicts with position, zone, critical rules, density, and content.
+    """
+    total_chars = sum(s["char_end"] - s["char_start"] for s in sections)
+    total_tokens = int(total_chars / CHARS_PER_TOKEN)
+
+    analyzed = []
+    cumulative = 0
+    for s in sections:
+        section_chars = s["char_end"] - s["char_start"]
+        pos_start = cumulative / total_chars if total_chars > 0 else 0
+        cumulative += section_chars
+        pos_end = cumulative / total_chars if total_chars > 0 else 0
+        zone = _classify_zone(pos_start, pos_end)
+        critical_rules = _find_critical_rules(s["lines"])
+        tokens = int(section_chars / CHARS_PER_TOKEN)
+        line_count = len([l for l in s["lines"] if l.strip()])
+        density = len(critical_rules) / max(line_count, 1)
+
+        analyzed.append({
+            "title": s["title"],
+            "level": s["level"],
+            "pos_start": pos_start,
+            "pos_end": pos_end,
+            "zone": zone,
+            "critical_rules": critical_rules,
+            "critical_count": len(critical_rules),
+            "density": density,
+            "tokens": tokens,
+            "chars": section_chars,
+            "content": s["content"],
+            "lines": s["lines"],
+        })
+
+    return analyzed, total_chars, total_tokens
+
+
+def attention_score(filepath=None, as_json=False):
+    """Score a file against the U-shaped attention curve."""
+    if filepath is None:
+        filepath = str(CLAUDE_DIR / "CLAUDE.md")
+
+    fp = Path(filepath).expanduser()
+    if not fp.exists():
+        print(f"[Error] File not found: {fp}")
+        sys.exit(1)
+
+    sections = _parse_sections(str(fp))
+    if not sections:
+        print(f"[Error] No content found in: {fp}")
+        sys.exit(1)
+
+    analyzed, total_chars, total_tokens = _analyze_attention_sections(sections)
+
+    score = _score_attention(analyzed)
+    low_critical_total = sum(a["critical_count"] for a in analyzed if a["zone"] == "LOW")
+
+    # Collect warnings
+    warnings = []
+    for a in analyzed:
+        if a["zone"] == "LOW" and a["critical_count"] > 0:
+            pct_start = int(a["pos_start"] * 100)
+            pct_end = int(a["pos_end"] * 100)
+            warnings.append({
+                "section": a["title"],
+                "position": f"{pct_start}-{pct_end}%",
+                "critical_count": a["critical_count"],
+                "critical_rules": a["critical_rules"],
+            })
+
+    if as_json:
+        result = {
+            "file": str(fp),
+            "sections": len(analyzed),
+            "total_tokens": total_tokens,
+            "score": score,
+            "critical_in_low_zone": low_critical_total,
+            "sections_detail": [
+                {
+                    "title": a["title"],
+                    "position": f"{int(a['pos_start'] * 100)}-{int(a['pos_end'] * 100)}%",
+                    "zone": a["zone"],
+                    "critical_count": a["critical_count"],
+                    "tokens": a["tokens"],
+                    "critical_rules": a["critical_rules"],
+                }
+                for a in analyzed
+            ],
+            "warnings": warnings,
+        }
+        print(json.dumps(result, indent=2))
+        return result
+
+    # Pretty print
+    display_name = str(fp).replace(str(HOME), "~")
+    print(f"\n  Attention Score: {fp.name}")
+    print(f"  {'=' * 50}")
+    print(f"  File: {display_name}")
+    print(f"  Sections: {len(analyzed)} | Tokens: ~{total_tokens:,}")
+    print(f"  Critical rules in LOW attention zone: {low_critical_total}")
+    print()
+    print(f"  Section Analysis:")
+    print(f"    {'Position':<10} {'Zone':<6}  {'Section':<32} {'Critical':<10} {'Tokens':>6}")
+    print(f"    {'--------':<10} {'------':<6}  {'----------------------------':<32} {'--------':<10} {'------':>6}")
+
+    for a in analyzed:
+        pct_start = int(a["pos_start"] * 100)
+        pct_end = int(a["pos_end"] * 100)
+        pos_str = f"{pct_start}-{pct_end}%"
+        title_trunc = a["title"][:30]
+        flag = "  !!!" if (a["zone"] == "LOW" and a["critical_count"] > 0) else ""
+        crit_str = str(a["critical_count"]) if a["critical_count"] > 0 else "0"
+        print(f"    {pos_str:<10} {a['zone']:<6}  {title_trunc:<32} {crit_str:<10}{flag:>5} {a['tokens']:>6}")
+
+    if warnings:
+        print()
+        print(f"  ATTENTION WARNINGS:")
+        for w in warnings:
+            print(f"  - \"{w['section']}\" has {w['critical_count']} critical rule{'s' if w['critical_count'] != 1 else ''} in LOW zone ({w['position']})")
+            for rule in w["critical_rules"][:5]:
+                display = rule[:80] + "..." if len(rule) > 80 else rule
+                print(f"    -> {display}")
+            print(f"    -> Move to first 30% or last 30% of file")
+
+    print(f"\n  Overall score: {score}/100 ({low_critical_total} critical rule{'s' if low_critical_total != 1 else ''} at risk)")
+    print()
+    return {"score": score, "sections": analyzed, "warnings": warnings}
+
+
+def attention_optimize(filepath=None, dry_run=True, apply=False):
+    """Reorder sections to maximize attention for critical rules."""
+    if filepath is None:
+        filepath = str(CLAUDE_DIR / "CLAUDE.md")
+
+    fp = Path(filepath).expanduser()
+    if not fp.exists():
+        print(f"[Error] File not found: {fp}")
+        sys.exit(1)
+
+    sections = _parse_sections(str(fp))
+    if not sections:
+        print(f"[Error] No content found in: {fp}")
+        sys.exit(1)
+
+    scored, total_chars, _ = _analyze_attention_sections(sections)
+
+    # Map shared analysis fields to optimize-specific names
+    for s in scored:
+        s["original_pos_start"] = s["pos_start"]
+        s["original_pos_end"] = s["pos_end"]
+        s["original_zone"] = s["zone"]
+
+    # Calculate before-score
+    before_score = _score_attention(scored)
+
+    # Sort into three zones:
+    # Zone 1 (top 30%): highest critical density
+    # Zone 3 (bottom 30%): medium critical density + paths/reminders/security
+    # Zone 2 (middle 40%): lowest critical density (reference material)
+
+    # Separate preamble (always stays at top)
+    preamble = [s for s in scored if s["title"] == "(preamble)"]
+    rest = [s for s in scored if s["title"] != "(preamble)"]
+
+    # Sort by critical density descending
+    rest_sorted = sorted(rest, key=lambda s: s["density"], reverse=True)
+
+    # Partition: top third -> Zone 1, bottom third -> Zone 3, middle -> Zone 2
+    n = len(rest_sorted)
+    if n <= 2:
+        zone1 = rest_sorted
+        zone2 = []
+        zone3 = []
+    else:
+        cut1 = max(1, n // 3)
+        cut2 = max(cut1 + 1, n - n // 3)
+        zone1 = rest_sorted[:cut1]
+        zone2 = rest_sorted[cut1:cut2]
+        zone3 = rest_sorted[cut2:]
+
+    reordered = preamble + zone1 + zone2 + zone3
+
+    # Calculate after-score by simulating new positions
+    new_total = sum(s["tokens"] * CHARS_PER_TOKEN for s in reordered)
+    new_cumulative = 0
+    after_analyzed = []
+    for s in reordered:
+        section_chars = s["tokens"] * CHARS_PER_TOKEN
+        pos_start = new_cumulative / new_total if new_total > 0 else 0
+        new_cumulative += section_chars
+        pos_end = new_cumulative / new_total if new_total > 0 else 0
+        zone = _classify_zone(pos_start, pos_end)
+        after_analyzed.append({
+            "zone": zone,
+            "critical_count": s["critical_count"],
+        })
+    after_score = _score_attention(after_analyzed)
+
+    # Determine moves
+    moves = []
+    original_order = [s["title"] for s in scored]
+    new_order = [s["title"] for s in reordered]
+    for i, title in enumerate(new_order):
+        old_idx = original_order.index(title)
+        old_s = scored[old_idx]
+        new_s = reordered[i]
+        # Calculate new position
+        chars_before = sum(r["tokens"] * CHARS_PER_TOKEN for r in reordered[:i])
+        new_pos_start = chars_before / new_total if new_total > 0 else 0
+        new_pos_end = (chars_before + new_s["tokens"] * CHARS_PER_TOKEN) / new_total if new_total > 0 else 0
+        new_zone = _classify_zone(new_pos_start, new_pos_end)
+
+        old_pct = f"{int(old_s['original_pos_start'] * 100)}-{int(old_s['original_pos_end'] * 100)}%"
+        new_pct = f"{int(new_pos_start * 100)}-{int(new_pos_end * 100)}%"
+
+        if old_idx == i:
+            moves.append(f"KEEP: \"{title}\" stays at {old_pct}")
+        else:
+            reason = ""
+            if new_s["critical_count"] > 0 and old_s["original_zone"] == "LOW" and new_zone == "HIGH":
+                reason = f" <- has {new_s['critical_count']} critical rule{'s' if new_s['critical_count'] != 1 else ''}"
+            moves.append(f"MOVE: \"{title}\" ({old_pct} -> {new_pct}){reason}")
+
+    display_name = str(fp).replace(str(HOME), "~")
+
+    if dry_run and not apply:
+        print(f"\n  Attention Optimizer (DRY RUN)")
+        print(f"  {'=' * 50}")
+        print(f"  File: {display_name}")
+        print()
+        print(f"  Proposed reordering:")
+        for m in moves:
+            print(f"    {m}")
+        print()
+        print(f"  Before: {before_score}/100 attention score")
+        print(f"  After:  {after_score}/100 attention score (estimated)")
+        print()
+        print(f"  To apply: python3 measure.py attention-optimize {display_name} --apply")
+        print()
+        return {"before_score": before_score, "after_score": after_score, "moves": moves}
+
+    if apply:
+        # Build reordered content
+        new_content = ""
+        for s in reordered:
+            new_content += s["content"]
+            # Ensure section ends with newline
+            if not new_content.endswith("\n"):
+                new_content += "\n"
+
+        # Backup original (with timestamp like jsonl_trim/dedup)
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_path = Path(str(fp) + f".{ts}.bak")
+        try:
+            import shutil
+            shutil.copy2(str(fp), str(backup_path))
+        except OSError as e:
+            print(f"[Error] Could not create backup: {e}")
+            sys.exit(1)
+
+        # Atomic write via temp file + rename
+        try:
+            fd, tmp_path = tempfile.mkstemp(dir=str(fp.parent), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as tmp_f:
+                    tmp_f.write(new_content)
+                os.replace(tmp_path, str(fp))
+            except Exception:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+                raise
+        except OSError as e:
+            print(f"[Error] Could not write file: {e}")
+            sys.exit(1)
+
+        print(f"\n  Attention Optimizer (APPLIED)")
+        print(f"  {'=' * 50}")
+        print(f"  File: {display_name}")
+        print(f"  Backup: {backup_path}")
+        print()
+        print(f"  Reordering applied:")
+        for m in moves:
+            print(f"    {m}")
+        print()
+        print(f"  Before: {before_score}/100 attention score")
+        print(f"  After:  {after_score}/100 attention score")
+        print()
+        return {"before_score": before_score, "after_score": after_score, "backup": backup_path}
+
+
+# ========== Tool Result Archive (v3.0) ==========
+# PostToolUse hook handler that archives large tool results to disk so they
+# survive compaction. Provides `expand` command to retrieve archived results.
+
+_ARCHIVE_THRESHOLD = 4096  # chars: only archive results >= this size
+_ARCHIVE_PREVIEW_SIZE = 1000  # chars: preview included in replacement output
+
+
+def _archive_dir_for_session(session_id):
+    """Return the archive directory for a given session."""
+    sid = _sanitize_session_id(session_id)
+    return SNAPSHOT_DIR / "tool-archive" / sid
+
+
+def archive_result(quiet=False):
+    """PostToolUse hook handler: archive large tool results to disk.
+
+    Reads hook JSON from stdin. If tool_response >= _ARCHIVE_THRESHOLD chars,
+    saves the full result to disk and (for MCP tools) outputs a trimmed
+    replacement via stdout with updatedMCPToolOutput.
+    """
+    hook_input = _read_stdin_hook_input()
+    if not hook_input:
+        return
+
+    tool_name = hook_input.get("tool_name", "")
+    tool_use_id = hook_input.get("tool_use_id", "")
+    tool_response = hook_input.get("tool_response", "")
+    session_id = hook_input.get("session_id", "")
+
+    if not tool_response or len(tool_response) < _ARCHIVE_THRESHOLD:
+        return
+
+    if not tool_use_id or not session_id:
+        if not quiet:
+            print("[Tool Archive] Missing tool_use_id or session_id, skipping.", file=sys.stderr)
+        return
+
+    # Sanitize tool_use_id (same pattern as session_id)
+    if not tool_use_id or not re.match(r'^[a-zA-Z0-9_-]+$', tool_use_id):
+        if not quiet:
+            print("[Tool Archive] Invalid tool_use_id, skipping", file=sys.stderr)
+        return
+
+    archive_dir = _archive_dir_for_session(session_id)
+    archive_dir.mkdir(parents=True, exist_ok=True)
+
+    now = datetime.now(timezone.utc)
+    char_count = len(tool_response)
+    token_est = int(char_count / CHARS_PER_TOKEN)
+
+    # Save full result
+    entry_data = {
+        "tool_name": tool_name,
+        "tool_use_id": tool_use_id,
+        "chars": char_count,
+        "tokens_est": token_est,
+        "timestamp": now.isoformat(),
+        "archived_from": "PostToolUse",
+        "response": tool_response,
+    }
+    entry_path = archive_dir / f"{tool_use_id}.json"
+    fd = os.open(str(entry_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(entry_data, f)
+
+    # Update manifest (append-only JSONL for crash safety)
+    manifest_path = archive_dir / "manifest.jsonl"
+
+    manifest_entry = {
+        "tool_name": tool_name,
+        "tool_use_id": tool_use_id,
+        "chars": char_count,
+        "tokens_est": token_est,
+        "timestamp": now.isoformat(),
+        "archived_from": "PostToolUse",
+    }
+
+    with open(manifest_path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(manifest_entry) + "\n")
+
+    # Log savings event for tracking
+    _log_savings_event("tool_archive", int(char_count / CHARS_PER_TOKEN), session_id=session_id, detail=f"archived {tool_name} ({char_count} chars)")
+
+    if not quiet:
+        print(f"[Tool Archive] Archived {tool_name} result ({char_count:,} chars, ~{token_est:,} tokens): {tool_use_id}", file=sys.stderr)
+
+    # For MCP tools (tool_name contains "__"): output replacement via stdout
+    if "__" in tool_name:
+        preview = tool_response[:_ARCHIVE_PREVIEW_SIZE]
+        replacement = preview + f"\n\n[Full result archived ({char_count:,} chars). Use 'expand {tool_use_id}' to retrieve.]"
+        output = json.dumps({"updatedMCPToolOutput": replacement})
+        print(output)
+
+
+def expand_archived(tool_use_id=None, session_id=None, list_all=False):
+    """Retrieve an archived tool result, or list all archived results.
+
+    If list_all is True, prints a summary of all archived results.
+    Otherwise, searches for tool_use_id and prints the full response.
+    """
+    archive_root = SNAPSHOT_DIR / "tool-archive"
+
+    if list_all:
+        if not archive_root.is_dir():
+            print("[Tool Archive] No archived results found.")
+            return
+        total = 0
+        session_dirs = sorted(archive_root.iterdir()) if archive_root.is_dir() else []
+        if session_id:
+            sid = _sanitize_session_id(session_id)
+            session_dirs = [d for d in session_dirs if d.name == sid]
+
+        for sd in session_dirs:
+            if not sd.is_dir():
+                continue
+            manifest_path = sd / "manifest.jsonl"
+            if not manifest_path.exists():
+                continue
+            manifest = []
+            with open(manifest_path, encoding="utf-8") as mf:
+                for mline in mf:
+                    mline = mline.strip()
+                    if mline:
+                        try:
+                            manifest.append(json.loads(mline))
+                        except json.JSONDecodeError:
+                            continue
+            if not manifest:
+                continue
+            print(f"\n  Session: {sd.name} ({len(manifest)} archived)")
+            for entry in manifest:
+                ts = entry.get("timestamp", "?")
+                if "T" in ts:
+                    ts = ts.split("T")[0] + " " + ts.split("T")[1][:8]
+                print(f"    {entry.get('tool_name', '?'):30s} {entry.get('chars', '?'):>8} chars  {entry.get('tool_use_id', '?')}  {ts}")
+                total += 1
+        if total == 0:
+            print("[Tool Archive] No archived results found.")
+        else:
+            print(f"\n  Total: {total} archived results")
+        print()
+        return
+
+    # Search for specific tool_use_id
+    if not tool_use_id:
+        print("[Error] No tool_use_id provided. Use: expand TOOL_USE_ID or expand --list", file=sys.stderr)
+        sys.exit(1)
+
+    # Sanitize tool_use_id (same pattern as session_id)
+    if not re.match(r'^[a-zA-Z0-9_-]+$', tool_use_id):
+        print("[Error] Invalid tool_use_id format.", file=sys.stderr)
+        sys.exit(1)
+
+    if not archive_root.is_dir():
+        print(f"[Error] No archive directory found. No results have been archived yet.", file=sys.stderr)
+        sys.exit(1)
+
+    # Determine search scope
+    if session_id:
+        search_dirs = [_archive_dir_for_session(session_id)]
+    else:
+        search_dirs = [d for d in archive_root.iterdir() if d.is_dir()]
+
+    for sd in search_dirs:
+        entry_path = sd / f"{tool_use_id}.json"
+        if entry_path.exists():
+            try:
+                data = json.loads(entry_path.read_text(encoding="utf-8"))
+                response = data.get("response", "")
+                if response:
+                    print(response)
+                    return
+                else:
+                    print(f"[Error] Archived entry found but response is empty: {entry_path}", file=sys.stderr)
+                    sys.exit(1)
+            except (json.JSONDecodeError, OSError) as e:
+                print(f"[Error] Failed to read archived result: {e}", file=sys.stderr)
+                sys.exit(1)
+
+    print(f"[Error] Tool result not found: {tool_use_id}", file=sys.stderr)
+    if not session_id:
+        print("  Tip: Use 'expand --list' to see all archived results.", file=sys.stderr)
+    sys.exit(1)
+
+
+def archive_cleanup(session_id=None):
+    """Clean up archived tool results.
+
+    If session_id is given, removes that session's archive directory.
+    Otherwise, removes archives older than 24 hours.
+    """
+    import shutil
+
+    archive_root = SNAPSHOT_DIR / "tool-archive"
+    if not archive_root.is_dir():
+        print("[Tool Archive] No archive directory found. Nothing to clean.")
+        return
+
+    cleaned = 0
+    cleaned_chars = 0
+
+    if session_id:
+        sid = _sanitize_session_id(session_id)
+        target = archive_root / sid
+        if target.is_dir():
+            # Count before removing
+            manifest_path = target / "manifest.jsonl"
+            if manifest_path.exists():
+                try:
+                    with open(manifest_path, encoding="utf-8") as mf:
+                        for mline in mf:
+                            mline = mline.strip()
+                            if mline:
+                                try:
+                                    entry = json.loads(mline)
+                                    cleaned += 1
+                                    cleaned_chars += entry.get("chars", 0)
+                                except json.JSONDecodeError:
+                                    continue
+                except OSError:
+                    pass
+            shutil.rmtree(str(target), ignore_errors=True)
+            print(f"[Tool Archive] Cleaned session {sid}: {cleaned} results, {cleaned_chars:,} chars freed.")
+        else:
+            print(f"[Tool Archive] No archive found for session {sid}.")
+        return
+
+    # Clean up archives older than 24 hours
+    cutoff = time.time() - 86400
+    for sd in list(archive_root.iterdir()):
+        if not sd.is_dir():
+            continue
+        # Check manifest timestamp or directory mtime
+        try:
+            mtime = sd.stat().st_mtime
+        except OSError:
+            continue
+        if mtime < cutoff:
+            manifest_path = sd / "manifest.jsonl"
+            count = 0
+            chars = 0
+            if manifest_path.exists():
+                try:
+                    with open(manifest_path, encoding="utf-8") as mf:
+                        for mline in mf:
+                            mline = mline.strip()
+                            if mline:
+                                try:
+                                    entry = json.loads(mline)
+                                    count += 1
+                                    chars += entry.get("chars", 0)
+                                except json.JSONDecodeError:
+                                    continue
+                except OSError:
+                    pass
+            shutil.rmtree(str(sd), ignore_errors=True)
+            cleaned += count
+            cleaned_chars += chars
+
+    if cleaned:
+        print(f"[Tool Archive] Cleaned {cleaned} archived results ({cleaned_chars:,} chars) older than 24h.")
+    else:
+        print("[Tool Archive] No stale archives to clean (all < 24h old).")
+
+    # Remove empty archive root if nothing left
+    try:
+        remaining = list(archive_root.iterdir())
+        if not remaining:
+            archive_root.rmdir()
+    except OSError:
+        pass
+
+
 # ========== Smart Compaction System (v2.0) ==========
 # PreCompact state capture, SessionStart restoration, Compact Instructions generation.
 # All logic in Python for cross-platform compatibility.
@@ -6318,11 +7642,12 @@ def _extract_session_state(filepath, tail_lines=500):
     }
 
 
-def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=None):
+def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=None, fill_pct=None):
     """Capture structured session state before compaction or session end.
 
     Writes a markdown checkpoint to CHECKPOINT_DIR.
     Called by PreCompact, Stop, and SessionEnd hooks via CLI.
+    Progressive checkpoints pass fill_pct and trigger="progressive-{band}".
 
     Returns the checkpoint file path, or None on failure.
     """
@@ -6342,13 +7667,17 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     else:
         filepath = Path(transcript_path)
 
+    # Build trigger suffix for filename (progressive checkpoints get labeled)
+    trigger_suffix = f"-{trigger}" if trigger.startswith("progressive-") else ""
+
     if not filepath or not filepath.exists():
         # Write minimal checkpoint with safe permissions
         sid = _sanitize_session_id(session_id)
-        checkpoint_path = CHECKPOINT_DIR / f"{sid}-{ts_file}.md"
+        checkpoint_path = CHECKPOINT_DIR / f"{sid}-{ts_file}{trigger_suffix}.md"
+        fill_info = f" | Fill: {fill_pct:.0f}%" if fill_pct is not None else ""
         content = (
             f"# Session State Checkpoint\n"
-            f"Generated: {ts} | Trigger: {trigger} | Note: No transcript data available\n"
+            f"Generated: {ts} | Trigger: {trigger}{fill_info} | Note: No transcript data available\n"
         )
         fd = os.open(str(checkpoint_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -6362,9 +7691,10 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
 
     # Generate checkpoint markdown
     sid = _sanitize_session_id(session_id) if session_id else _sanitize_session_id(filepath.stem)
+    fill_info = f" | Fill: {fill_pct:.0f}%" if fill_pct is not None else ""
     lines = [
         f"# Session State Checkpoint",
-        f"Generated: {ts} | Trigger: {trigger}",
+        f"Generated: {ts} | Trigger: {trigger}{fill_info}",
         "",
     ]
 
@@ -6411,6 +7741,27 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
             lines.append(f"- {agent_type}: {desc}")
         lines.append("")
 
+    # Check for archived tool results
+    archive_dir = SNAPSHOT_DIR / "tool-archive" / sid
+    if archive_dir.is_dir():
+        manifest_path = archive_dir / "manifest.jsonl"
+        if manifest_path.exists():
+            manifest = []
+            with open(manifest_path, encoding="utf-8") as mf:
+                for mline in mf:
+                    mline = mline.strip()
+                    if mline:
+                        try:
+                            manifest.append(json.loads(mline))
+                        except json.JSONDecodeError:
+                            continue
+            if manifest:
+                lines.append("## Archived Tool Results")
+                lines.append("The following large tool results were archived and can be expanded:")
+                for entry in manifest[-10:]:  # Last 10
+                    lines.append(f"- {entry.get('tool_name', '?')} ({entry.get('chars', '?')} chars): expand {entry.get('tool_use_id', '?')}")
+                lines.append("")
+
     # Continuation
     if state["current_step"]["last_assistant"]:
         lines.append("## Continuation")
@@ -6418,7 +7769,7 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
         lines.append("")
 
     checkpoint_content = "\n".join(lines)
-    checkpoint_path = CHECKPOINT_DIR / f"{sid}-{ts_file}.md"
+    checkpoint_path = CHECKPOINT_DIR / f"{sid}-{ts_file}{trigger_suffix}.md"
     # Write with restrictive permissions (checkpoint may contain session details)
     fd = os.open(str(checkpoint_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -6480,18 +7831,58 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
         return
 
     if is_compact and sid_safe:
-        # Post-compaction: find checkpoint for this session
+        # Post-compaction: find best checkpoint for this session.
+        # Progressive checkpoints (captured at 50/65/80% fill) are preferred because
+        # they contain richer context than emergency checkpoints at ~98%.
+        # IMPORTANT: progressive checkpoints are EXEMPT from TTL check because they
+        # are created early (at 50% fill) but consumed much later (at ~98% compaction).
+        _PROGRESSIVE_RANK = {"progressive-50": 0, "progressive-65": 1, "progressive-80": 2}
+
+        session_checkpoints = []
         for cp in checkpoints:
-            if sid_safe in cp["filename"]:
-                age_seconds = (datetime.now() - cp["created"]).total_seconds()
-                if age_seconds < _CHECKPOINT_TTL_SECONDS:
-                    _print_checkpoint_body(cp["path"], "[Token Optimizer] Post-compaction context recovery:")
-                    return
-        # No matching checkpoint found, try most recent
+            if sid_safe not in cp["filename"]:
+                continue
+            trigger = cp.get("trigger", "auto")
+            is_progressive = trigger.startswith("progressive-")
+            age_seconds = (datetime.now() - cp["created"]).total_seconds()
+            # Progressive checkpoints skip TTL, others must be within TTL
+            if not is_progressive and age_seconds >= _CHECKPOINT_TTL_SECONDS:
+                continue
+            rank = _PROGRESSIVE_RANK.get(trigger, 10)  # non-progressive = low priority (10)
+            session_checkpoints.append((rank, cp))
+
+        if session_checkpoints:
+            # Sort by rank (lowest = best progressive), then by recency for ties
+            session_checkpoints.sort(key=lambda x: (x[0], -x[1]["created"].timestamp()))
+            best_cp = session_checkpoints[0][1]
+            trigger_label = best_cp.get("trigger", "auto")
+            label = f"[Token Optimizer] Post-compaction context recovery (from {trigger_label} checkpoint):"
+            _print_checkpoint_body(best_cp["path"], label)
+            # Log savings: estimate recovered tokens from checkpoint size
+            try:
+                cp_size = best_cp["path"].stat().st_size
+                est_tokens_recovered = int(cp_size / CHARS_PER_TOKEN)
+                if est_tokens_recovered > 0:
+                    _log_savings_event("checkpoint_restore", est_tokens_recovered,
+                                       session_id=sid_safe, detail=f"restored from {trigger_label}")
+            except (OSError, KeyError):
+                pass
+            return
+
+        # No matching checkpoint found, try most recent (any session)
         latest = checkpoints[0]
         age_seconds = (datetime.now() - latest["created"]).total_seconds()
         if age_seconds < _CHECKPOINT_TTL_SECONDS:
             _print_checkpoint_body(latest["path"], "[Token Optimizer] Post-compaction context recovery:")
+            # Log savings for fallback checkpoint restore
+            try:
+                cp_size = latest["path"].stat().st_size
+                est_tokens_recovered = int(cp_size / CHARS_PER_TOKEN)
+                if est_tokens_recovered > 0:
+                    _log_savings_event("checkpoint_restore", est_tokens_recovered,
+                                       session_id=sid_safe, detail="restored from fallback checkpoint")
+            except (OSError, KeyError):
+                pass
         return
 
 
@@ -6645,7 +8036,7 @@ def list_checkpoints(max_age_minutes=None):
     Args:
         max_age_minutes: Only return checkpoints newer than this. Default: no limit.
 
-    Returns: list of dicts with path, filename, created datetime.
+    Returns: list of dicts with path, filename, created datetime, trigger type.
     """
     if not CHECKPOINT_DIR.exists():
         return []
@@ -6659,10 +8050,19 @@ def list_checkpoints(max_age_minutes=None):
                 age = (datetime.now() - created).total_seconds() / 60
                 if age > max_age_minutes:
                     continue
+
+            # Parse trigger type from filename suffix
+            trigger = "auto"
+            for t in ("progressive-50", "progressive-65", "progressive-80", "stop", "end", "stop-failure"):
+                if f"-{t}" in cp_file.name:
+                    trigger = t
+                    break
+
             checkpoints.append({
                 "path": cp_file,
                 "filename": cp_file.name,
                 "created": created,
+                "trigger": trigger,
             })
         except OSError:
             continue
@@ -7026,6 +8426,62 @@ def _extract_active_agents(filepath):
     return running[-5:]
 
 
+def _maybe_progressive_checkpoint(fill_pct, cache_path, result, filepath):
+    """Create a progressive checkpoint if fill_pct crosses an uncaptured band.
+
+    Progressive checkpoints capture richer session state at 50%, 65%, and 80%
+    context fill, instead of only at ~98% (PreCompact). Earlier capture means
+    more decisions, files, and context are preserved.
+
+    Mutates `result` dict to track captured bands. Writes updated cache.
+    """
+    if not filepath or fill_pct <= 0:
+        return
+
+    bands_captured = result.get("progressive_bands_captured", [])
+
+    # Find the highest band crossed but not yet captured
+    target_band = None
+    for band in sorted(_PROGRESSIVE_BANDS, reverse=True):
+        if fill_pct >= band and band not in bands_captured:
+            target_band = band
+            break
+
+    if target_band is None:
+        return
+
+    t0 = time.time()
+
+    # Determine session ID from filepath (JSONL filename = session UUID)
+    session_id = filepath.stem if hasattr(filepath, "stem") else Path(filepath).stem
+
+    try:
+        cp_path = compact_capture(
+            transcript_path=str(filepath),
+            session_id=session_id,
+            trigger=f"progressive-{target_band}",
+            fill_pct=fill_pct,
+        )
+    except Exception:
+        return
+
+    elapsed_ms = int((time.time() - t0) * 1000)
+
+    if cp_path:
+        # Mark this band AND all lower bands as captured
+        for band in _PROGRESSIVE_BANDS:
+            if band <= target_band and band not in bands_captured:
+                bands_captured.append(band)
+        bands_captured.sort()
+
+        result["progressive_bands_captured"] = bands_captured
+        result["progressive_last_checkpoint"] = cp_path
+        result["progressive_capture_ms"] = elapsed_ms
+
+        # Persist updated result to cache
+        _write_quality_cache(cache_path, result)
+
+
 def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None, force=False):
     """Run quality analysis and write score to cache file for status line.
 
@@ -7099,6 +8555,15 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
 
     if not _write_quality_cache(cache_path, result):
         return None
+
+    # Progressive checkpoints (v3.0)
+    if _PROGRESSIVE_ENABLED and result.get("fill_pct", 0) > 0:
+        _maybe_progressive_checkpoint(
+            fill_pct=result["fill_pct"],
+            cache_path=cache_path,
+            result=result,
+            filepath=filepath,
+        )
 
     return result.get("score")
 
@@ -7292,6 +8757,75 @@ def setup_quality_bar(dry_run=False, uninstall=False, status_only=False):
         if "cache hook" in installed:
             print(f"  The cache hook is installed. Quality data will be written to:")
             print(f"    {QUALITY_CACHE_PATH}")
+
+
+# ========== Savings Dashboard (v3.0) ==========
+
+_SAVINGS_CATEGORY_LABELS = {
+    "setup_optimization": "Setup optimization",
+    "tool_digest": "Tool digests",
+    "checkpoint_restore": "Checkpoint restores",
+    "tool_archive": "Tool archives",
+}
+
+
+def savings_report(days=30, as_json=False):
+    """Display cumulative savings from Token Optimizer actions."""
+    summary = _get_savings_summary(days=days)
+
+    if as_json:
+        print(json.dumps(summary, indent=2))
+        return
+
+    now = datetime.now()
+    start = (now - timedelta(days=days)).strftime("%Y-%m-%d")
+    end = now.strftime("%Y-%m-%d")
+
+    print(f"\n  Token Optimizer Savings Report")
+    print(f"  {'=' * 58}")
+    print(f"  Period: Last {days} days ({start} to {end})")
+    print()
+    print(f"  {'Category':<28s} {'Events':>8s} {'Tokens Saved':>14s} {'Cost Saved':>11s}")
+    print(f"  {'-' * 25}  {'-' * 8}  {'-' * 14}  {'-' * 11}")
+
+    by_cat = summary.get("by_category", {})
+
+    # Show all known categories (even if zero)
+    for key, label in _SAVINGS_CATEGORY_LABELS.items():
+        cat_data = by_cat.get(key, {})
+        events = cat_data.get("events", 0)
+        tokens = cat_data.get("tokens_saved", 0)
+        cost = cat_data.get("cost_saved_usd", 0.0)
+        print(f"  {label:<28s} {events:>8,} {tokens:>14,} {'$' + f'{cost:.2f}':>11s}")
+
+    # Show any unknown categories that appeared in the data
+    for key, cat_data in by_cat.items():
+        if key not in _SAVINGS_CATEGORY_LABELS:
+            events = cat_data.get("events", 0)
+            tokens = cat_data.get("tokens_saved", 0)
+            cost = cat_data.get("cost_saved_usd", 0.0)
+            print(f"  {key:<28s} {events:>8,} {tokens:>14,} {'$' + f'{cost:.2f}':>11s}")
+
+    print(f"  {'-' * 25}  {'-' * 8}  {'-' * 14}  {'-' * 11}")
+
+    total_events = summary.get("total_events", 0)
+    total_tokens = summary.get("total_tokens", 0)
+    total_cost = summary.get("total_cost_usd", 0.0)
+    daily_avg = summary.get("daily_avg_usd", 0.0)
+    est_monthly = daily_avg * 30
+
+    print(f"  {'TOTAL':<28s} {total_events:>8,} {total_tokens:>14,} {'$' + f'{total_cost:.2f}':>11s}")
+    print()
+    print(f"  Daily average: ${daily_avg:.2f} saved")
+    print(f"  Estimated monthly: ${est_monthly:.2f}")
+    print(f"  {'=' * 58}")
+
+    if total_events == 0:
+        print()
+        print(f"  No savings events recorded yet. Savings are tracked when you:")
+        print(f"    - Run 'compare' after optimizing your setup")
+        print(f"    - Restore from progressive checkpoints (Smart Compaction)")
+        print(f"    - Archive unused tools or skills")
 
 
 if __name__ == "__main__":
@@ -7673,7 +9207,8 @@ if __name__ == "__main__":
                 age_str = f"{int(age.total_seconds() / 60)}m ago" if age.total_seconds() < 3600 else f"{int(age.total_seconds() / 3600)}h ago"
                 print(f"    {cp['filename']:50s} {age_str}")
             print()
-    elif args[0] == "trends":
+    elif args[0] in ("trends", "savings"):
+        # Shared --days/--json parsing for trends and savings
         days = 30
         output_json = False
         i = 1
@@ -7694,7 +9229,10 @@ if __name__ == "__main__":
             else:
                 print(f"[Error] Unknown flag: {args[i]}")
                 sys.exit(1)
-        usage_trends(days=days, as_json=output_json)
+        if args[0] == "trends":
+            usage_trends(days=days, as_json=output_json)
+        else:
+            savings_report(days=days, as_json=output_json)
     elif args[0] == "skill" and len(args) >= 3:
         action = args[1]  # archive or restore
         name = args[2]
@@ -7713,6 +9251,85 @@ if __name__ == "__main__":
         else:
             print(f"  Unknown mcp action: {action}. Use 'disable' or 'enable'.")
             sys.exit(1)
+    elif args[0] == "jsonl-inspect":
+        output_json = "--json" in args
+        target = None
+        for a in args[1:]:
+            if a.startswith("--"):
+                continue
+            target = a
+            break
+        jsonl_inspect(arg=target, as_json=output_json)
+    elif args[0] == "jsonl-trim":
+        do_apply = "--apply" in args
+        threshold = 4000
+        target = None
+        for i, a in enumerate(args[1:], start=1):
+            if a == "--threshold" and i + 1 < len(args):
+                try:
+                    threshold = int(args[i + 1])
+                except ValueError:
+                    print(f"[Error] Invalid --threshold value: {args[i + 1]}")
+                    sys.exit(1)
+            elif a.startswith("--"):
+                continue
+            elif target is None:
+                target = a
+        jsonl_trim(arg=target, apply=do_apply, threshold=threshold)
+    elif args[0] == "jsonl-dedup":
+        do_apply = "--apply" in args
+        target = None
+        for a in args[1:]:
+            if a.startswith("--"):
+                continue
+            target = a
+            break
+        jsonl_dedup(arg=target, apply=do_apply)
+    elif args[0] == "attention-score":
+        output_json = "--json" in args
+        target = None
+        for a in args[1:]:
+            if a.startswith("--"):
+                continue
+            target = a
+            break
+        attention_score(filepath=target, as_json=output_json)
+    elif args[0] == "attention-optimize":
+        do_apply = "--apply" in args
+        dry = "--dry-run" in args or not do_apply
+        target = None
+        for a in args[1:]:
+            if a.startswith("--"):
+                continue
+            target = a
+            break
+        attention_optimize(filepath=target, dry_run=dry, apply=do_apply)
+    elif args[0] == "archive-result":
+        # PostToolUse hook handler: archive large tool results
+        quiet = "--quiet" in args or "-q" in args
+        archive_result(quiet=quiet)
+    elif args[0] == "expand":
+        # Retrieve archived tool result
+        list_all = "--list" in args
+        sid = None
+        tool_id = None
+        for i, a in enumerate(args[1:], start=1):
+            if a == "--session" and i + 1 < len(args):
+                sid = args[i + 1]
+            elif a.startswith("--"):
+                continue
+            elif tool_id is None:
+                tool_id = a
+        expand_archived(tool_use_id=tool_id, session_id=sid, list_all=list_all)
+    elif args[0] == "archive-cleanup":
+        # Clean up archived tool results
+        sid = None
+        for a in args[1:]:
+            if a.startswith("--"):
+                continue
+            sid = a
+            break
+        archive_cleanup(session_id=sid)
     else:
         print("Usage:")
         print("  python3 measure.py quick               # Quick scan: overhead, degradation risk, top offenders")
@@ -7734,6 +9351,9 @@ if __name__ == "__main__":
         print("  python3 measure.py trends               # Usage trends (last 30 days)")
         print("  python3 measure.py trends --days 7      # Usage trends (last 7 days)")
         print("  python3 measure.py trends --json        # Machine-readable output")
+        print("  python3 measure.py savings              # Savings report (last 30 days)")
+        print("  python3 measure.py savings --days 7     # Savings report (last 7 days)")
+        print("  python3 measure.py savings --json       # Machine-readable savings output")
         print("  python3 measure.py coach                # Interactive coaching data")
         print("  python3 measure.py coach --json         # Coaching data as JSON")
         print("  python3 measure.py coach --focus skills  # Focus on skill optimization")
@@ -7769,6 +9389,27 @@ if __name__ == "__main__":
         print("  python3 measure.py skill restore SKILL_NAME        # Restore an archived skill")
         print("  python3 measure.py mcp disable SERVER_NAME         # Disable an MCP server")
         print("  python3 measure.py mcp enable SERVER_NAME          # Re-enable a disabled MCP server")
+        print("  python3 measure.py jsonl-inspect [ID|PATH]         # Inspect JSONL session stats")
+        print("  python3 measure.py jsonl-inspect --json             # Machine-readable inspect output")
+        print("  python3 measure.py jsonl-trim                       # Dry-run: find trimmable tool results")
+        print("  python3 measure.py jsonl-trim --apply               # Trim large tool results (backup + sidecar)")
+        print("  python3 measure.py jsonl-trim --threshold 8000      # Custom char threshold (default 4000)")
+        print("  python3 measure.py jsonl-dedup                      # Dry-run: find duplicate system reminders")
+        print("  python3 measure.py jsonl-dedup --apply              # Remove duplicate system reminders")
+        print("  python3 measure.py attention-score                   # Score CLAUDE.md against attention curve")
+        print("  python3 measure.py attention-score FILE              # Score any markdown file")
+        print("  python3 measure.py attention-score --json            # Machine-readable attention score")
+        print("  python3 measure.py attention-optimize                # Dry-run: propose section reordering")
+        print("  python3 measure.py attention-optimize FILE           # Optimize a specific file")
+        print("  python3 measure.py attention-optimize --apply        # Apply reordering (backup + write)")
+        print("  python3 measure.py archive-result                        # PostToolUse hook: archive large tool results")
+        print("  python3 measure.py archive-result --quiet                 # Silent mode (suppress stderr)")
+        print("  python3 measure.py expand TOOL_USE_ID                     # Retrieve archived tool result")
+        print("  python3 measure.py expand TOOL_USE_ID --session SID       # Retrieve from specific session")
+        print("  python3 measure.py expand --list                          # List all archived results")
+        print("  python3 measure.py expand --list --session SID            # List archived results for session")
+        print("  python3 measure.py archive-cleanup                        # Clean archives older than 24h")
+        print("  python3 measure.py archive-cleanup SESSION_ID             # Clean specific session archive")
         print("  python3 measure.py setup-daemon            # Install persistent dashboard server (macOS)")
         print("  python3 measure.py setup-daemon --dry-run  # Show what would be installed")
         print("  python3 measure.py setup-daemon --uninstall # Remove dashboard daemon")
