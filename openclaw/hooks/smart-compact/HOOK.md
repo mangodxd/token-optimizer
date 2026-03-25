@@ -1,9 +1,15 @@
 ---
 name: smart-compact
 description: Protect session state across OpenClaw compaction events
-events:
-  - session:compact:before
-  - session:compact:after
+metadata:
+  openclaw:
+    emoji: "\U0001F4BE"
+    events:
+      - session:compact:before
+      - session:compact:after
+    requires:
+      bins:
+        - node
 ---
 
 # Smart Compaction Hook

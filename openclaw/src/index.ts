@@ -1,12 +1,10 @@
 /**
  * Token Optimizer for OpenClaw - Plugin Entry Point
  *
- * Registers as an OpenClaw plugin via the standard plugin API:
+ * Uses definePluginEntry() to register with the OpenClaw plugin system:
  * - api.registerService() for the token-optimizer service
  * - api.on() for lifecycle events
  * - api.logger for structured logging
- *
- * This file is the main entry point referenced in openclaw.plugin.json.
  */
 
 import * as fs from "fs";
@@ -36,6 +34,17 @@ interface OpenClawApi {
     warn(msg: string, ...args: unknown[]): void;
     error(msg: string, ...args: unknown[]): void;
   };
+}
+
+interface PluginEntryOptions {
+  id: string;
+  name: string;
+  description: string;
+  register: (api: OpenClawApi) => void;
+}
+
+function definePluginEntry(options: PluginEntryOptions): PluginEntryOptions {
+  return options;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,97 +155,93 @@ export function generateDashboard(days: number = 30): string | null {
 // Plugin registration (called by OpenClaw plugin loader)
 // ---------------------------------------------------------------------------
 
-/**
- * OpenClaw plugin entry point.
- *
- * Called by the OpenClaw plugin system when the plugin is loaded.
- * Registers the token-optimizer service and hooks into lifecycle events.
- */
-export function activate(api: OpenClawApi): void {
-  api.logger.info("[token-optimizer] Plugin activated");
+export default definePluginEntry({
+  id: "token-optimizer",
+  name: "Token Optimizer",
+  description: "Token waste auditor for OpenClaw. Detects idle burns, model misrouting, and context bloat.",
+  register(api: OpenClawApi) {
+    api.logger.info("[token-optimizer] Plugin activated");
 
-  // Register service so other plugins/skills can call our methods
-  api.registerService("token-optimizer", {
-    audit,
-    scan,
-    generateDashboard,
-  });
+    // Register service so other plugins/skills can call our methods
+    api.registerService("token-optimizer", {
+      audit,
+      scan,
+      generateDashboard,
+    });
 
-  // Log on gateway startup
-  api.on("gateway:startup", () => {
-    api.logger.info("[token-optimizer] Gateway started, ready to audit");
+    // Log on gateway startup
+    api.on("gateway:startup", () => {
+      api.logger.info("[token-optimizer] Gateway started, ready to audit");
 
-    // Clean up old checkpoints on startup
-    const cleaned = cleanupCheckpoints(7);
-    if (cleaned > 0) {
+      // Clean up old checkpoints on startup
+      const cleaned = cleanupCheckpoints(7);
+      if (cleaned > 0) {
+        api.logger.info(
+          `[token-optimizer] Cleaned ${cleaned} old checkpoint(s)`
+        );
+      }
+    });
+
+    // Log on agent bootstrap
+    api.on("agent:bootstrap", (...args: unknown[]) => {
+      const agentId =
+        typeof args[0] === "object" && args[0] !== null
+          ? (args[0] as Record<string, unknown>).agentId
+          : undefined;
       api.logger.info(
-        `[token-optimizer] Cleaned ${cleaned} old checkpoint(s)`
+        `[token-optimizer] Agent bootstrapped: ${agentId ?? "unknown"}`
       );
-    }
-  });
+    });
 
-  // Log on agent bootstrap
-  api.on("agent:bootstrap", (...args: unknown[]) => {
-    const agentId =
-      typeof args[0] === "object" && args[0] !== null
-        ? (args[0] as Record<string, unknown>).agentId
-        : undefined;
-    api.logger.info(
-      `[token-optimizer] Agent bootstrapped: ${agentId ?? "unknown"}`
-    );
-  });
+    // Smart Compaction v2: capture before compaction (intelligent extraction)
+    api.on("session:compact:before", (...args: unknown[]) => {
+      const session = args[0] as {
+        sessionId: string;
+        messages?: Array<{ role: string; content: string; timestamp?: string }>;
+      } | undefined;
 
-  // Smart Compaction v2: capture before compaction (intelligent extraction)
-  api.on("session:compact:before", (...args: unknown[]) => {
-    const session = args[0] as {
-      sessionId: string;
-      messages?: Array<{ role: string; content: string; timestamp?: string }>;
-    } | undefined;
+      if (!session?.sessionId) {
+        api.logger.warn(
+          "[token-optimizer] compact:before fired without session data"
+        );
+        return;
+      }
 
-    if (!session?.sessionId) {
-      api.logger.warn(
-        "[token-optimizer] compact:before fired without session data"
-      );
-      return;
-    }
+      // Try v2 (intelligent extraction), fall back to v1
+      const filepath = captureCheckpointV2(session) ?? captureCheckpoint(session);
+      if (filepath) {
+        api.logger.info(
+          `[token-optimizer] Checkpoint saved: ${filepath}`
+        );
+      }
+    });
 
-    // Try v2 (intelligent extraction), fall back to v1
-    const filepath = captureCheckpointV2(session) ?? captureCheckpoint(session);
-    if (filepath) {
-      api.logger.info(
-        `[token-optimizer] Checkpoint saved: ${filepath}`
-      );
-    }
-  });
+    // Smart Compaction: restore after compaction
+    api.on("session:compact:after", (...args: unknown[]) => {
+      const session = args[0] as {
+        sessionId: string;
+        inject?: (content: string) => void;
+      } | undefined;
 
-  // Smart Compaction: restore after compaction
-  api.on("session:compact:after", (...args: unknown[]) => {
-    const session = args[0] as {
-      sessionId: string;
-      inject?: (content: string) => void;
-    } | undefined;
+      if (!session?.sessionId) return;
 
-    if (!session?.sessionId) return;
+      const checkpoint = restoreCheckpoint(session.sessionId);
+      if (checkpoint && session.inject) {
+        session.inject(checkpoint);
+        api.logger.info(
+          `[token-optimizer] Checkpoint restored for session ${session.sessionId}`
+        );
+      }
+    });
 
-    const checkpoint = restoreCheckpoint(session.sessionId);
-    if (checkpoint && session.inject) {
-      session.inject(checkpoint);
-      api.logger.info(
-        `[token-optimizer] Checkpoint restored for session ${session.sessionId}`
-      );
-    }
-  });
-
-  // Generate dashboard silently on session end
-  api.on("session:end", () => {
-    try {
-      generateDashboard(30);
-      api.logger.info("[token-optimizer] Dashboard regenerated on session end");
-    } catch {
-      // Silent failure, dashboard generation is non-critical
-    }
-  });
-}
-
-// Default export for OpenClaw plugin loader
-export default { activate };
+    // Generate dashboard silently on session end
+    api.on("session:end", () => {
+      try {
+        generateDashboard(30);
+        api.logger.info("[token-optimizer] Dashboard regenerated on session end");
+      } catch {
+        // Silent failure, dashboard generation is non-critical
+      }
+    });
+  },
+});

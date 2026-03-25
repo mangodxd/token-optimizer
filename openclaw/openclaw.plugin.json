@@ -1,17 +1,17 @@
 {
   "id": "token-optimizer",
-  "name": "token-optimizer",
-  "version": "1.2.0",
+  "name": "Token Optimizer",
   "description": "Find the ghost tokens. Audit your OpenClaw setup, see where context goes, fix it.",
-  "entry": "dist/index.js",
+  "version": "1.2.0",
   "skills": ["skills/token-optimizer"],
-  "hooks": ["hooks/smart-compact"],
-  "events": [
-    "gateway:startup",
-    "agent:bootstrap",
-    "session:compact:before",
-    "session:compact:after",
-    "session:end"
-  ],
-  "minOpenClawVersion": "2026.3.0"
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "scanDays": {
+        "type": "number",
+        "description": "Default number of days to scan (default: 30)"
+      }
+    }
+  }
 }
