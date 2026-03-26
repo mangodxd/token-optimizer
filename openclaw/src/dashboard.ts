@@ -1954,13 +1954,19 @@ function renderJS(): string {
   }
 
   document.querySelectorAll('.manage-toggle input').forEach(function(input) {
+    // Track original checked state so we know if user is changing or reverting
+    input._origChecked = input.checked;
     input.addEventListener('change', function() {
       var cmd = this.getAttribute('data-manage-cmd');
       var name = this.getAttribute('data-manage-name') || cmd;
       if (!cmd) return;
-      // Every toggle adds its command (archive OR restore, baked into data-manage-cmd).
-      // Toggling the same item again replaces the previous command.
-      pendingChanges[name] = cmd;
+      // If the toggle moved AWAY from its original state, queue the command.
+      // If it moved BACK to its original state, remove it (user changed their mind).
+      if (this.checked !== this._origChecked) {
+        pendingChanges[name] = cmd;
+      } else {
+        delete pendingChanges[name];
+      }
       updatePendingBar();
     });
   });

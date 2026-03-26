@@ -168,6 +168,7 @@ function buildDashboardData(runs, report, quality = null, context = null) {
             messages: r.messageCount,
             outcome: r.outcome,
             qualityScore: sq.score,
+            qualityGrade: sq.grade,
             qualityBand: sq.band,
         };
     });
@@ -289,13 +290,14 @@ function modelColor(m) {
     return "#8b8fa0";
 }
 function qualityBand(score) {
+    const grade = (0, quality_1.scoreToGrade)(score);
     if (score >= 80)
-        return { label: "Good", color: "var(--c-success)" };
+        return { label: "Good", color: "var(--c-success)", grade };
     if (score >= 60)
-        return { label: "Fair", color: "var(--c-warning)" };
+        return { label: "Fair", color: "var(--c-warning)", grade };
     if (score >= 40)
-        return { label: "Needs Work", color: "#fb923c" };
-    return { label: "Poor", color: "var(--c-danger)" };
+        return { label: "Needs Work", color: "#fb923c", grade };
+    return { label: "Poor", color: "var(--c-danger)", grade };
 }
 // ---------------------------------------------------------------------------
 // HTML sections
@@ -334,9 +336,9 @@ function renderOverview(data) {
         : "";
     const qualityScore = data.quality
         ? `<div class="stat-card">
-        <div class="stat-card-value" style="color:${qualityBand(data.quality.score).color}">${data.quality.score}</div>
+        <div class="stat-card-value" style="color:${qualityBand(data.quality.score).color}">${qualityBand(data.quality.score).grade}</div>
         <div class="stat-card-label">Quality Score</div>
-        <div class="stat-card-qualifier">${qualityBand(data.quality.score).label}</div>
+        <div class="stat-card-qualifier">${data.quality.score}/100 (${qualityBand(data.quality.score).label})</div>
       </div>`
         : "";
     return `<div class="view active" id="view-overview">
@@ -516,7 +518,8 @@ function renderQuality(data) {
     </div>
 
     <div style="text-align:center;margin:var(--s-4) 0">
-      <div style="font-family:var(--font-mono);font-size:72px;font-weight:500;color:${band.color};text-shadow:0 0 20px ${band.color}">${q.score}</div>
+      <div style="font-family:var(--font-mono);font-size:72px;font-weight:500;color:${band.color};text-shadow:0 0 20px ${band.color}">${band.grade}</div>
+      <div style="font-size:28px;font-weight:500;font-family:var(--font-mono);color:${band.color}">${q.score}/100</div>
       <div style="font-size:16px;color:${band.color};text-transform:uppercase;letter-spacing:0.2em">${esc(band.label)}</div>
     </div>
 
@@ -813,7 +816,7 @@ function renderSessions(data) {
                 <td style="color:var(--c-accent-cyan)">${fmtCost(r.cost)}</td>
                 <td>${fmtDuration(r.duration)}</td>
                 <td><span style="color:${outcomeColor(r.outcome)}">${esc(r.outcome)}</span></td>
-                <td><span style="color:${qualityBand(r.qualityScore).color}">${r.qualityScore} ${esc(r.qualityBand)}</span></td>
+                <td><span style="color:${qualityBand(r.qualityScore).color}">${r.qualityGrade} (${r.qualityScore})</span></td>
               </tr>`;
         }).join("")}
             </tbody>
@@ -1867,13 +1870,19 @@ function renderJS() {
   }
 
   document.querySelectorAll('.manage-toggle input').forEach(function(input) {
+    // Track original checked state so we know if user is changing or reverting
+    input._origChecked = input.checked;
     input.addEventListener('change', function() {
       var cmd = this.getAttribute('data-manage-cmd');
       var name = this.getAttribute('data-manage-name') || cmd;
       if (!cmd) return;
-      // Every toggle adds its command (archive OR restore, baked into data-manage-cmd).
-      // Toggling the same item again replaces the previous command.
-      pendingChanges[name] = cmd;
+      // If the toggle moved AWAY from its original state, queue the command.
+      // If it moved BACK to its original state, remove it (user changed their mind).
+      if (this.checked !== this._origChecked) {
+        pendingChanges[name] = cmd;
+      } else {
+        delete pendingChanges[name];
+      }
       updatePendingBar();
     });
   });

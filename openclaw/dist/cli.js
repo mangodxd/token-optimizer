@@ -7,6 +7,39 @@
  *   npx token-optimizer scan [--days 30] [--json]
  *   npx token-optimizer audit [--days 30] [--json]
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", { value: true });
 const index_1 = require("./index");
 const models_1 = require("./models");
@@ -15,6 +48,8 @@ const context_audit_1 = require("./context-audit");
 const quality_1 = require("./quality");
 const drift_1 = require("./drift");
 const child_process_1 = require("child_process");
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const HOME = process.env.HOME ?? process.env.USERPROFILE ?? "";
 /** Redact home directory from paths to avoid leaking usernames in shared output */
 function redactPaths(obj) {
@@ -23,16 +58,17 @@ function redactPaths(obj) {
         : val));
 }
 function printUsage() {
-    console.log(`Token Optimizer for OpenClaw v1.1.0
+    console.log(`Token Optimizer for OpenClaw v1.3.0
 
 Usage:
-  token-optimizer scan      [--days N] [--json]   Scan sessions and show token usage
-  token-optimizer audit     [--days N] [--json]   Detect waste patterns with $ savings
-  token-optimizer dashboard [--days N]             Generate HTML dashboard and open
-  token-optimizer context   [--json]               Show context overhead breakdown
-  token-optimizer quality   [--days N] [--json]    Show quality score breakdown
-  token-optimizer drift     [--snapshot]            Config drift detection
-  token-optimizer detect                            Check if OpenClaw is installed
+  token-optimizer scan         [--days N] [--json]   Scan sessions and show token usage
+  token-optimizer audit        [--days N] [--json]   Detect waste patterns with $ savings
+  token-optimizer dashboard    [--days N]             Generate HTML dashboard and open
+  token-optimizer context      [--json]               Show context overhead breakdown
+  token-optimizer quality      [--days N] [--json]    Show quality score breakdown
+  token-optimizer git-context  [--json]               Suggest files based on git state
+  token-optimizer drift        [--snapshot]            Config drift detection
+  token-optimizer detect                               Check if OpenClaw is installed
 
 Options:
   --days N      Number of days to scan (default: 30)
@@ -221,7 +257,7 @@ function cmdQuality(days, json) {
         console.log(JSON.stringify(report, null, 2));
         return;
     }
-    console.log(`\nQuality Score: ${report.score}/100 (${report.band})`);
+    console.log(`\nQuality Score: ${report.grade} (${report.score}/100) (${report.band})`);
     console.log("=".repeat(50));
     for (const sig of report.signals) {
         const bar = "█".repeat(Math.round(sig.score / 2.5));
@@ -234,6 +270,102 @@ function cmdQuality(days, json) {
             console.log(`  → ${rec}`);
         }
     }
+}
+function cmdGitContext(json) {
+    function runGit(...args) {
+        try {
+            return (0, child_process_1.execSync)(`git ${args.join(" ")}`, { encoding: "utf-8", timeout: 10000 }).trim();
+        }
+        catch {
+            return "";
+        }
+    }
+    const diffOutput = runGit("diff", "--name-only");
+    const stagedOutput = runGit("diff", "--name-only", "--cached");
+    const statusOutput = runGit("status", "--porcelain");
+    const modified = new Set();
+    if (diffOutput)
+        diffOutput.split("\n").forEach((f) => modified.add(f));
+    if (stagedOutput)
+        stagedOutput.split("\n").forEach((f) => modified.add(f));
+    for (const line of (statusOutput || "").split("\n")) {
+        if (line.startsWith("??"))
+            modified.add(line.slice(3).trim());
+    }
+    if (modified.size === 0) {
+        if (json) {
+            console.log(JSON.stringify({ modified: [], test_companions: [], co_changed: [], import_chain: [] }, null, 2));
+        }
+        else {
+            console.log("\nNo modified files detected. Run this after making changes.\n");
+        }
+        return;
+    }
+    // Test companion mapping
+    const testCompanions = [];
+    for (const f of [...modified].sort()) {
+        const ext = path.extname(f);
+        const stem = path.basename(f, ext);
+        const dir = path.dirname(f);
+        if (stem.toLowerCase().includes("test") || stem.toLowerCase().includes("spec"))
+            continue;
+        const candidates = [
+            `test_${stem}${ext}`, `${stem}_test${ext}`, `${stem}.test${ext}`, `${stem}.spec${ext}`,
+            `tests/test_${stem}${ext}`, `__tests__/${stem}${ext}`,
+            `${dir}/test_${stem}${ext}`, `${dir}/${stem}.test${ext}`, `${dir}/${stem}.spec${ext}`,
+            `${dir}/__tests__/${stem}${ext}`,
+        ];
+        for (const c of candidates) {
+            if (fs.existsSync(c) && !modified.has(c)) {
+                testCompanions.push({ source: f, test: c });
+                break;
+            }
+        }
+    }
+    // Co-change analysis from last 50 commits
+    const logOutput = runGit("log", "--oneline", "--name-only", "-50", "--pretty=format:");
+    const coChanged = new Map();
+    if (logOutput) {
+        for (const block of logOutput.split("\n\n")) {
+            const files = block.split("\n").map((l) => l.trim()).filter(Boolean);
+            for (const mf of modified) {
+                if (files.includes(mf)) {
+                    for (const cf of files) {
+                        if (cf !== mf && !modified.has(cf)) {
+                            coChanged.set(cf, (coChanged.get(cf) ?? 0) + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const topCo = [...coChanged.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+    const result = {
+        modified: [...modified].sort(),
+        test_companions: testCompanions,
+        co_changed: topCo.map(([file, times]) => ({ file, times })),
+        import_chain: [], // Simplified for OpenClaw CLI
+    };
+    if (json) {
+        console.log(JSON.stringify(result, null, 2));
+        return;
+    }
+    console.log(`\nGit Context Suggestions`);
+    console.log("=".repeat(50));
+    console.log(`Modified files (${modified.size}):`);
+    for (const f of [...modified].sort())
+        console.log(`  ${f}`);
+    if (testCompanions.length > 0) {
+        console.log(`\nTest companions (add to context):`);
+        for (const tc of testCompanions)
+            console.log(`  ${tc.test}  (tests ${tc.source})`);
+    }
+    if (topCo.length > 0) {
+        console.log(`\nFrequently co-changed:`);
+        for (const [f, n] of topCo)
+            console.log(`  ${f}  (${n}x in last 50 commits)`);
+    }
+    console.log();
 }
 function cmdDrift(snapshot) {
     const dir = (0, session_parser_1.findOpenClawDir)();
@@ -280,6 +412,9 @@ switch (command) {
         break;
     case "quality":
         cmdQuality(days, json);
+        break;
+    case "git-context":
+        cmdGitContext(json);
         break;
     case "drift":
         cmdDrift(snapshot);

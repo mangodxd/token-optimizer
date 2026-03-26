@@ -7,6 +7,7 @@
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.contextWindowForModel = contextWindowForModel;
+exports.scoreToGrade = scoreToGrade;
 exports.scoreQuality = scoreQuality;
 exports.scoreSessionQuality = scoreSessionQuality;
 const models_1 = require("./models");
@@ -269,6 +270,23 @@ function bandFromScore(score) {
         return "Needs Work";
     return "Poor";
 }
+/**
+ * Convert a 0-100 quality score to a letter grade.
+ * S: 90-100 | A: 80-89 | B: 70-79 | C: 55-69 | D: 40-54 | F: 0-39
+ */
+function scoreToGrade(score) {
+    if (score >= 90)
+        return "S";
+    if (score >= 80)
+        return "A";
+    if (score >= 70)
+        return "B";
+    if (score >= 55)
+        return "C";
+    if (score >= 40)
+        return "D";
+    return "F";
+}
 function generateQualityRecommendations(signals) {
     const recs = [];
     const sorted = [...signals].sort((a, b) => a.score - b.score);
@@ -305,9 +323,10 @@ function scoreQuality(runs, contextAudit) {
     ];
     const weightedScore = signals.reduce((sum, sig) => sum + sig.score * sig.weight, 0);
     const score = Math.round(Math.min(100, Math.max(0, weightedScore)));
+    const grade = scoreToGrade(score);
     const band = bandFromScore(score);
     const recommendations = generateQualityRecommendations(signals);
-    return { score, band, signals, recommendations };
+    return { score, grade, band, signals, recommendations };
 }
 // ---------------------------------------------------------------------------
 // Per-session quality scoring
@@ -399,7 +418,8 @@ function scoreSessionQuality(run) {
         ratioScore * 0.15 +
         durationScore * 0.15;
     const score = Math.round(Math.min(100, Math.max(0, weighted)));
+    const grade = scoreToGrade(score);
     const band = bandFromScore(score);
-    return { score, band };
+    return { score, grade, band };
 }
 //# sourceMappingURL=quality.js.map

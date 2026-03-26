@@ -67,6 +67,7 @@ interface SessionRow {
     messages: number;
     outcome: string;
     qualityScore: number;
+    qualityGrade: string;
     qualityBand: string;
 }
 export declare function buildDashboardData(runs: AgentRun[], report: AuditReport, quality?: QualityReport | null, context?: ContextAudit | null): DashboardData;

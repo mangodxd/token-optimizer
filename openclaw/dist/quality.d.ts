@@ -14,11 +14,17 @@ export interface QualitySignal {
 }
 export interface QualityReport {
     score: number;
+    grade: string;
     band: string;
     signals: QualitySignal[];
     recommendations: string[];
 }
 export declare function contextWindowForModel(model: string): number;
+/**
+ * Convert a 0-100 quality score to a letter grade.
+ * S: 90-100 | A: 80-89 | B: 70-79 | C: 55-69 | D: 40-54 | F: 0-39
+ */
+export declare function scoreToGrade(score: number): string;
 export declare function scoreQuality(runs: AgentRun[], contextAudit?: ContextAudit | null): QualityReport;
 /**
  * Score a single AgentRun's quality on a 0-100 scale.
@@ -32,6 +38,7 @@ export declare function scoreQuality(runs: AgentRun[], contextAudit?: ContextAud
  */
 export declare function scoreSessionQuality(run: AgentRun): {
     score: number;
+    grade: string;
     band: string;
 };
 //# sourceMappingURL=quality.d.ts.map
