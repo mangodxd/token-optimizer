@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-3.0.0-green" alt="Version 3.0.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-3.1.0-green" alt="Version 3.1.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-Plugin-brightgreen" alt="OpenClaw Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/alexgreensh/token-optimizer" alt="License"></a>
@@ -68,7 +68,44 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 
 ---
 
-### NEW in v3.0: Progressive Checkpoints, Tool Archive, Savings Tracking, JSONL Toolkit, Attention Optimizer
+### NEW in v3.1: Efficiency Grading, Read-Cache, Git-Context, .contextignore
+
+| Feature | What You Get |
+|---------|-------------|
+| **Efficiency Grading** | Every quality score now shows a letter grade (S/A/B/C/D/F). Status line shows `ContextQ:A(82)`. Dashboard badges, coach tab, and CLI output all include grades. At a glance: S is peak, F means your context is rotting. |
+| **PreToolUse Read-Cache** | Detects redundant file reads and optionally blocks them with structural digests. Opt-in: `TOKEN_OPTIMIZER_READ_CACHE=1`. Default warn mode; upgrade to `TOKEN_OPTIMIZER_READ_CACHE_MODE=block` after gaining confidence. Saves 8-30% tokens from read deduplication. |
+| **Git-Aware Context** | `git-context` command analyzes your working tree to suggest files that should be in context: test companions, frequently co-changed files from last 50 commits, and import chains for Python/JS/TS. |
+| **.contextignore** | Block files from being read with gitignore-style patterns. Project root `.contextignore` + global `~/.claude/.contextignore`. Hard block regardless of read-cache mode. |
+| **Performance** | PostToolUse archive-result now uses tool matchers (~15-30s saved per session). Read-cache runs as a standalone 45ms script. |
+
+```bash
+# Enable read-cache (opt-in)
+export TOKEN_OPTIMIZER_READ_CACHE=1               # Enable (warn mode)
+export TOKEN_OPTIMIZER_READ_CACHE_MODE=block       # Upgrade to block mode
+
+# Git context suggestions
+python3 measure.py git-context                     # Suggest files for current changes
+python3 measure.py git-context --json              # Machine-readable output
+
+# Read-cache management
+python3 measure.py read-cache-stats --session ID   # Cache stats for a session
+python3 measure.py read-cache-clear                # Clear all caches
+```
+
+Create `.contextignore` in your project root:
+```
+# Block build artifacts and lockfiles
+dist/**
+node_modules/**
+package-lock.json
+yarn.lock
+*.min.js
+*.min.css
+```
+
+---
+
+### v3.0: Progressive Checkpoints, Tool Archive, Savings Tracking, JSONL Toolkit, Attention Optimizer
 
 | Feature | What You Get |
 |---------|-------------|
@@ -127,6 +164,7 @@ python3 measure.py kill-stale --dry-run       # Preview without killing
 | `conversation` | **"What happened each turn?"** Per-message token + cost breakdown with spike detection. |
 | `pricing-tier` | **"What am I paying?"** View or switch between Anthropic/Vertex/Bedrock pricing tiers. |
 | `kill-stale` | **"Clean up zombies."** Terminate headless sessions running 12+ hours. |
+| `git-context` | **"What files matter right now?"** Test companions, co-changed files, import chains for your current git diff. |
 | `trends` | **"What's actually being used?"** Skill adoption, model mix, overhead trajectory over time. |
 | `coach` | **"Where do I start?"** Detects 8 named anti-patterns and recommends specific fixes. |
 | `dashboard` | **"Show me everything."** Interactive HTML dashboard with all analytics. |
