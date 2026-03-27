@@ -130,7 +130,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "test -f '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' && python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/measure.py' archive-result --quiet || true"
+            "command": "test -f '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/archive_result.py' && python3 '${CLAUDE_PLUGIN_ROOT}/skills/token-optimizer/scripts/archive_result.py' --quiet || true"
           }
         ]
       },

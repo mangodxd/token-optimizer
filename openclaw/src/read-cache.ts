@@ -2,7 +2,8 @@
  * Token Optimizer - Read Cache for OpenClaw.
  *
  * Intercepts Read tool calls via agent:tool:before events to detect redundant reads.
- * Opt-in via TOKEN_OPTIMIZER_READ_CACHE=1 env var.
+ * Default ON (warn mode). Opt out via TOKEN_OPTIMIZER_READ_CACHE=0 env var
+ * or config.json {"read_cache_enabled": false}.
  *
  * Modes:
  *   warn  (default) - logs redundant read, does NOT block
@@ -80,17 +81,24 @@ function loadContextignorePatterns(): string[] {
 
 /**
  * Simple glob match using minimatch-style logic (fnmatch equivalent).
- * Supports * and ** patterns.
+ * Supports * and ** patterns. Pre-compiled regex cache avoids ~1,200
+ * regex compilations per session.
  */
+const _fnmatchCache = new Map<string, RegExp>();
+
 function fnmatch(filepath: string, pattern: string): boolean {
-  // Convert glob pattern to regex
-  const regex = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*\*/g, "{{GLOBSTAR}}")
-    .replace(/\*/g, "[^/]*")
-    .replace(/\?/g, "[^/]")
-    .replace(/\{\{GLOBSTAR\}\}/g, ".*");
-  return new RegExp(`^${regex}$`).test(filepath);
+  let re = _fnmatchCache.get(pattern);
+  if (!re) {
+    const regex = pattern
+      .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+      .replace(/\*\*/g, "{{GLOBSTAR}}")
+      .replace(/\*/g, "[^/]*")
+      .replace(/\?/g, "[^/]")
+      .replace(/\{\{GLOBSTAR\}\}/g, ".*");
+    re = new RegExp(`^${regex}$`);
+    _fnmatchCache.set(pattern, re);
+  }
+  return re.test(filepath);
 }
 
 function isContextignored(filePath: string): boolean {
@@ -150,6 +158,8 @@ function digestFallback(content: string): string {
 }
 
 function generateDigest(filePath: string, content: string): string {
+  const lines = content.split("\n");
+  if (lines.length > 10000) return `${lines.length} lines (too large for structural digest)`;
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".py") return digestPython(content);
   if ([".js", ".ts", ".jsx", ".tsx", ".mjs", ".cjs"].includes(ext)) return digestJavaScript(content);
@@ -204,19 +214,20 @@ function saveCache(agentId: string, sessionId: string, cache: ReadCache): void {
 
   const cp = cachePath(agentId, sessionId);
   const dir = path.dirname(cp);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = cp + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(cache), { mode: 0o600 });
   fs.renameSync(tmp, cp);
 }
 
 function logDecision(decision: string, filePath: string, reason: string, sessionId: string): void {
-  const dir = CACHE_DIR;
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const logPath = path.join(dir, "decisions.jsonl");
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "") || "unknown";
+  const dir = path.join(CACHE_DIR, "decisions");
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const logPath = path.join(dir, `${safeSession}.jsonl`);
   const entry = JSON.stringify({ ts: Date.now() / 1000, decision, file: filePath, reason, session: sessionId });
   try {
-    fs.appendFileSync(logPath, entry + "\n");
+    fs.appendFileSync(logPath, entry + "\n", { mode: 0o600 });
   } catch { /* ignore */ }
 }
 
@@ -241,8 +252,24 @@ export interface ToolEventData {
  * Handle agent:tool:before for Read events.
  * Returns { block: true, message: string } to block, or null to allow.
  */
+function isReadCacheDisabled(): boolean {
+  const envVal = process.env.TOKEN_OPTIMIZER_READ_CACHE;
+  if (envVal === "0") return true;
+  if (envVal === undefined) {
+    // Env var missing (possibly stripped). Check config file.
+    const configPath = path.join(HOME, ".openclaw", "token-optimizer", "read-cache", "config.json");
+    try {
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+        if (config.read_cache_enabled === false) return true;
+      }
+    } catch { /* ignore */ }
+  }
+  return false;
+}
+
 export function handleReadBefore(event: ToolEventData): { block: boolean; message: string } | null {
-  if (!process.env.TOKEN_OPTIMIZER_READ_CACHE) return null;
+  if (isReadCacheDisabled()) return null;
 
   const mode = (process.env.TOKEN_OPTIMIZER_READ_CACHE_MODE ?? "warn").toLowerCase();
   const rawPath = event.toolInput.file_path ?? "";
@@ -360,4 +387,8 @@ export function handleWriteAfter(event: ToolEventData): void {
 export function clearCache(agentId: string, sessionId: string): void {
   const cp = cachePath(agentId, sessionId);
   try { fs.unlinkSync(cp); } catch { /* ignore */ }
+  // Also remove per-session decisions file
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, "") || "unknown";
+  const dp = path.join(CACHE_DIR, "decisions", `${safeSession}.jsonl`);
+  try { fs.unlinkSync(dp); } catch { /* ignore */ }
 }

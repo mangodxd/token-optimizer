@@ -2,7 +2,8 @@
 """Token Optimizer - PreToolUse Read Cache (standalone entry point).
 
 Intercepts Read tool calls to detect redundant file reads.
-Opt-in via TOKEN_OPTIMIZER_READ_CACHE=1 env var.
+Default ON (warn mode). Opt out via TOKEN_OPTIMIZER_READ_CACHE=0 env var
+or config.json {"read_cache_enabled": false}.
 
 Modes:
   warn  (default) - outputs digest as suggestion, does NOT block
@@ -33,7 +34,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 _PLUGIN_DATA = os.environ.get("CLAUDE_PLUGIN_DATA")
-SNAPSHOT_DIR = Path(_PLUGIN_DATA) / "data" if _PLUGIN_DATA else Path.home() / ".claude" / "token-optimizer"
+SNAPSHOT_DIR = Path(_PLUGIN_DATA) / "data" if _PLUGIN_DATA else Path.home() / ".claude" / "_backups" / "token-optimizer"
 CACHE_DIR = SNAPSHOT_DIR / "read-cache"
 MAX_CACHE_ENTRIES = 500
 MAX_CONTEXTIGNORE_PATTERNS = 200
@@ -182,9 +183,12 @@ def _cache_path(session_id: str) -> Path:
     return CACHE_DIR / f"{safe_id}.json"
 
 
-def _decisions_log_path() -> Path:
-    """Get decisions log path."""
-    return CACHE_DIR / "decisions.jsonl"
+def _decisions_log_path(session_id: str = "unknown") -> Path:
+    """Get per-session decisions log path."""
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '', session_id) or "unknown"
+    d = CACHE_DIR / "decisions"
+    d.mkdir(parents=True, exist_ok=True, mode=0o700)
+    return d / f"{safe_id}.jsonl"
 
 
 def _load_cache(session_id: str) -> dict:
@@ -226,8 +230,7 @@ def _save_cache(session_id: str, cache: dict) -> None:
 
 
 def _log_decision(decision: str, file_path: str, reason: str, session_id: str) -> None:
-    """Append decision to decisions.jsonl."""
-    CACHE_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    """Append decision to per-session decisions.jsonl."""
     entry = {
         "ts": time.time(),
         "decision": decision,
@@ -235,7 +238,7 @@ def _log_decision(decision: str, file_path: str, reason: str, session_id: str) -
         "reason": reason,
         "session": session_id,
     }
-    log_path = _decisions_log_path()
+    log_path = _decisions_log_path(session_id)
     try:
         if not log_path.exists():
             fd = os.open(str(log_path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
@@ -397,12 +400,32 @@ def handle_clear(session_id: str, quiet: bool) -> None:
         cp = _cache_path(session_id)
         if cp.exists():
             cp.unlink()
-            if not quiet:
-                print(f"[Read Cache] Cleared cache for session {session_id}", file=sys.stderr)
+        # Also remove per-session decisions file
+        dp = _decisions_log_path(session_id)
+        if dp.exists():
+            try:
+                dp.unlink()
+            except OSError:
+                pass
+        if not quiet:
+            print(f"[Read Cache] Cleared cache for session {session_id}", file=sys.stderr)
     elif session_id == "all":
         if CACHE_DIR.exists():
             for f in CACHE_DIR.glob("*.json"):
                 f.unlink()
+            for f in CACHE_DIR.glob("*.tmp"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+            # Clear all decisions files
+            decisions_dir = CACHE_DIR / "decisions"
+            if decisions_dir.exists():
+                for f in decisions_dir.glob("*.jsonl"):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
             if not quiet:
                 print("[Read Cache] Cleared all caches", file=sys.stderr)
 
@@ -438,22 +461,21 @@ def handle_stats(session_id: str) -> None:
     total_reads = sum(e.get("read_count", 0) for e in files.values())
     total_tokens = sum(e.get("tokens_est", 0) for e in files.values())
 
-    # Count decisions from log
-    log_path = _decisions_log_path()
+    # Count decisions from per-session log
+    log_path = _decisions_log_path(session_id)
     warns = blocks = allows = 0
     if log_path.exists():
         try:
             for line in log_path.read_text(encoding="utf-8").splitlines():
                 try:
                     d = json.loads(line)
-                    if d.get("session") == session_id:
-                        dec = d.get("decision", "")
-                        if dec == "warn":
-                            warns += 1
-                        elif dec == "block":
-                            blocks += 1
-                        elif dec == "allow":
-                            allows += 1
+                    dec = d.get("decision", "")
+                    if dec == "warn":
+                        warns += 1
+                    elif dec == "block":
+                        blocks += 1
+                    elif dec == "allow":
+                        allows += 1
                 except json.JSONDecodeError:
                     pass
         except OSError:
@@ -467,6 +489,33 @@ def handle_stats(session_id: str) -> None:
         "decisions": {"allow": allows, "warn": warns, "block": blocks},
     }
     print(json.dumps(result, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Opt-out detection
+# ---------------------------------------------------------------------------
+
+def _is_read_cache_disabled() -> bool:
+    """Check if user explicitly disabled read-cache via env var or config file.
+
+    Config file fallback handles ENV_SCRUB stripping the env var.
+    """
+    env_val = os.environ.get("TOKEN_OPTIMIZER_READ_CACHE")
+    if env_val == "0":
+        return True
+    if env_val is None:
+        # Env var missing (possibly stripped by ENV_SCRUB). Check config file.
+        # Use SNAPSHOT_DIR (respects CLAUDE_PLUGIN_DATA) not just CACHE_DIR
+        for config_dir in [SNAPSHOT_DIR, CACHE_DIR]:
+            config_path = config_dir / "config.json"
+            if config_path.exists():
+                try:
+                    config = json.loads(config_path.read_text(encoding="utf-8"))
+                    if config.get("read_cache_enabled") is False:
+                        return True
+                except (json.JSONDecodeError, OSError, ValueError):
+                    pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -504,8 +553,8 @@ def main():
         return
 
     # Default: PreToolUse Read handler
-    # Check opt-in
-    if not os.environ.get("TOKEN_OPTIMIZER_READ_CACHE"):
+    # Check opt-out (default ON, user opts out with env var or config)
+    if _is_read_cache_disabled():
         return
 
     mode = os.environ.get("TOKEN_OPTIMIZER_READ_CACHE_MODE", "warn").lower()

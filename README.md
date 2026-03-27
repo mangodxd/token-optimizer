@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-3.1.0-green" alt="Version 3.1.0"></a>
+  <a href="https://github.com/alexgreensh/token-optimizer/releases"><img src="https://img.shields.io/badge/version-3.2.0-green" alt="Version 3.2.0"></a>
   <a href="https://github.com/alexgreensh/token-optimizer"><img src="https://img.shields.io/badge/Claude_Code-Plugin-blueviolet" alt="Claude Code Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/tree/main/openclaw"><img src="https://img.shields.io/badge/OpenClaw-Plugin-brightgreen" alt="OpenClaw Plugin"></a>
   <a href="https://github.com/alexgreensh/token-optimizer/blob/main/LICENSE"><img src="https://img.shields.io/github/license/alexgreensh/token-optimizer" alt="License"></a>
@@ -73,14 +73,14 @@ Token Optimizer tracks all of this. Quality score, degradation bands, compaction
 | Feature | What You Get |
 |---------|-------------|
 | **Efficiency Grading** | Every quality score now shows a letter grade (S/A/B/C/D/F). Status line shows `ContextQ:A(82)`. Dashboard badges, coach tab, and CLI output all include grades. At a glance: S is peak, F means your context is rotting. |
-| **PreToolUse Read-Cache** | Detects redundant file reads and optionally blocks them with structural digests. Opt-in: `TOKEN_OPTIMIZER_READ_CACHE=1`. Default warn mode; upgrade to `TOKEN_OPTIMIZER_READ_CACHE_MODE=block` after gaining confidence. Saves 8-30% tokens from read deduplication. |
+| **PreToolUse Read-Cache** | Detects redundant file reads and optionally blocks them with structural digests. Default ON (warn mode). Opt out: `TOKEN_OPTIMIZER_READ_CACHE=0` or config `{"read_cache_enabled": false}`. Upgrade to `TOKEN_OPTIMIZER_READ_CACHE_MODE=block` after gaining confidence. Saves 8-30% tokens from read deduplication. |
 | **Git-Aware Context** | `git-context` command analyzes your working tree to suggest files that should be in context: test companions, frequently co-changed files from last 50 commits, and import chains for Python/JS/TS. |
 | **.contextignore** | Block files from being read with gitignore-style patterns. Project root `.contextignore` + global `~/.claude/.contextignore`. Hard block regardless of read-cache mode. |
-| **Performance** | PostToolUse archive-result now uses tool matchers (~15-30s saved per session). Read-cache runs as a standalone 45ms script. |
+| **Performance** | PostToolUse archive-result extracted to standalone script (~40ms, saves 13-18s per session). Read-cache default ON. Per-session decision logs. |
 
 ```bash
-# Enable read-cache (opt-in)
-export TOKEN_OPTIMIZER_READ_CACHE=1               # Enable (warn mode)
+# Read-cache is ON by default (warn mode). To disable:
+export TOKEN_OPTIMIZER_READ_CACHE=0               # Disable
 export TOKEN_OPTIMIZER_READ_CACHE_MODE=block       # Upgrade to block mode
 
 # Git context suggestions

@@ -497,9 +497,9 @@ Analyzes git diff/status to suggest which files should be in context: modified f
 ### PreToolUse Read-Cache
 Detects redundant file reads and optionally blocks them with structural digests.
 
-**Opt-in**: Set `TOKEN_OPTIMIZER_READ_CACHE=1` in your environment.
+**Default ON** (warn mode). Opt out: `TOKEN_OPTIMIZER_READ_CACHE=0` or config `{"read_cache_enabled": false}`.
 **Modes**: `TOKEN_OPTIMIZER_READ_CACHE_MODE=warn` (default, suggests) or `=block` (prevents re-read).
-**Decisions log**: `~/.claude/token-optimizer/read-cache/decisions.jsonl`
+**Decisions log**: Per-session files in `~/.claude/token-optimizer/read-cache/decisions/`
 **Stats**: `python3 $MEASURE_PY read-cache-stats --session SESSION_ID`
 **Clear**: `python3 $MEASURE_PY read-cache-clear`
 

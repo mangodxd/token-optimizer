@@ -2327,6 +2327,12 @@ def _serve_dashboard(filepath, port=8080, host="127.0.0.1"):
 
         def do_POST(self):
             """Handle API requests for skill/MCP management."""
+            # CSRF protection: reject requests from foreign origins
+            origin = self.headers.get("Origin", "")
+            if origin and not any(origin.startswith(p) for p in ("http://127.0.0.1:", "http://localhost:", "http://[::1]:")):
+                self.send_error(403, "Forbidden: invalid origin")
+                return
+
             path = self.path.split("?")[0]
 
             # Body size limit
@@ -8583,6 +8589,7 @@ def _write_quality_cache(cache_path, result):
     matched by session_id, so the global fallback is no longer needed.
     """
     QUALITY_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
     try:
         fd, tmp_path = tempfile.mkstemp(dir=str(QUALITY_CACHE_DIR), suffix=".json")
         with os.fdopen(fd, "w") as f:
@@ -8590,10 +8597,11 @@ def _write_quality_cache(cache_path, result):
         os.replace(tmp_path, str(cache_path))
         return True
     except OSError:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+        if tmp_path:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
         return False
 
 
@@ -9356,11 +9364,25 @@ if __name__ == "__main__":
                     warn_threshold = int(args[i + 1])
                 except ValueError:
                     pass
+        # Self-healing: if quality-cache hook is missing from settings.json, reinstall it.
+        # Respects "quality_bar_disabled" in config.json for permanent opt-out.
+        try:
+            _qb_disabled = False
+            if CONFIG_PATH.exists():
+                _qb_cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                _qb_disabled = _qb_cfg.get("quality_bar_disabled", False)
+            if not _qb_disabled and SETTINGS_PATH.exists():
+                _sh_settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+                _sh_hooks = _sh_settings.get("hooks", {}).get("UserPromptSubmit", [])
+                if not any("quality-cache" in str(h) for h in _sh_hooks):
+                    setup_quality_bar()
+        except Exception:
+            pass
         # Read hook payload from stdin if available (provides exact transcript_path)
         session_jsonl = None
         if not sys.stdin.isatty():
             try:
-                payload = json.loads(sys.stdin.read())
+                payload = json.loads(sys.stdin.read(1_000_000))
                 session_jsonl = payload.get("transcript_path")
             except (json.JSONDecodeError, OSError):
                 pass
@@ -9401,27 +9423,43 @@ if __name__ == "__main__":
                     f.unlink()
             except OSError:
                 pass
-        # Prune old quality-cache files (keep 10 most recent, delete files older than 7 days)
+        # Prune old quality-cache and decisions files (older than 7 days)
+        _prune_cutoff = time.time() - 7 * 86400
         try:
             cache_files = sorted(
                 QUALITY_CACHE_DIR.glob("quality-cache-*.json"),
                 key=lambda f: f.stat().st_mtime, reverse=True
             )
-            cutoff = time.time() - 7 * 86400
             for f in cache_files[10:]:  # Keep 10 most recent regardless of age
                 try:
-                    if f.stat().st_mtime < cutoff:
+                    if f.stat().st_mtime < _prune_cutoff:
                         f.unlink()
                 except OSError:
                     pass
         except (OSError, ValueError):
             pass
+        try:
+            decisions_dir = SNAPSHOT_DIR / "read-cache" / "decisions"
+            if decisions_dir.is_dir():
+                for f in decisions_dir.glob("*.jsonl"):
+                    try:
+                        if f.stat().st_mtime < _prune_cutoff:
+                            f.unlink()
+                    except OSError:
+                        pass
+        except (OSError, ValueError):
+            pass
         # Auto-install quality bar on first run (statusline + cache hook)
         # If no statusLine exists at all, install ours silently.
         # If statusLine exists but cache hook is missing, fix that too.
+        # Respects "quality_bar_disabled" in config.json for permanent opt-out.
         try:
-            if SETTINGS_PATH.exists():
-                settings = json.loads(SETTINGS_PATH.read_text())
+            _eh_qb_disabled = False
+            if CONFIG_PATH.exists():
+                _eh_cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+                _eh_qb_disabled = _eh_cfg.get("quality_bar_disabled", False)
+            if not _eh_qb_disabled and SETTINGS_PATH.exists():
+                settings = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
                 has_statusline = bool(settings.get("statusLine"))
                 hooks = settings.get("hooks", {}).get("UserPromptSubmit", [])
                 has_cache_hook = any("quality-cache" in str(h) for h in hooks)
@@ -9440,11 +9478,14 @@ if __name__ == "__main__":
                     should_check = age > 86400  # Once per day
                 if should_check:
                     import subprocess
+                    update_log = install_dir / ".last-update.log"
+                    log_fd = os.open(str(update_log), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
                     subprocess.Popen(
                         ["git", "-C", str(install_dir), "pull", "--ff-only"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                        stdout=log_fd, stderr=subprocess.STDOUT,
                         start_new_session=True
                     )
+                    os.close(log_fd)
                     update_marker.touch()
         except Exception:
             pass
